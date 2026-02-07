@@ -1,0 +1,12 @@
+.env
+.terraform/
+*.tfstate
+*.tfstate.backup
+terraform.tfstate.d/
+terraform.tfvars
+*.auto.tfvars
+.terraform.lock.hcl
+environments/*.tfvars
+!environments/template.tfvars
+.playwright-mcp/
+firebase-debug.log

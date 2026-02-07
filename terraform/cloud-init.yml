@@ -1,0 +1,48 @@
+#cloud-config
+
+users:
+  - name: openclaw
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+ssh_pwauth: false
+
+write_files:
+  - path: /home/openclaw/.openclaw/.env
+    permissions: "0600"
+    content: |
+      ANTHROPIC_API_KEY=${anthropic_api_key}
+      OPENAI_API_KEY=${openai_api_key}
+      GEMINI_API_KEY=${gemini_api_key}
+      OPENROUTER_API_KEY=${openrouter_api_key}
+      XAI_API_KEY=${xai_api_key}
+      GATEWAY_TOKEN=${gateway_token}
+  - path: /home/openclaw/.openclaw/openclaw.json
+    permissions: "0600"
+    encoding: b64
+    content: ${openclaw_config_b64}
+
+runcmd:
+  - "sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config"
+  - "sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
+  - "sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
+  - systemctl restart sshd
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - apt-get install -y nodejs
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --authkey=${tailscale_authkey} --hostname=${instance_name}
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 41641/udp
+  - ufw --force enable
+  - apt-get install -y fail2ban systemd-container
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+  - npm install -g openclaw@latest
+  - mkdir -p /home/openclaw/.openclaw
+  - chown -R openclaw:openclaw /home/openclaw/.openclaw
+  - chmod 700 /home/openclaw/.openclaw
+  - loginctl enable-linger openclaw
