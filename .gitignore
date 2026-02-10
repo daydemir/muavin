@@ -10,3 +10,7 @@ environments/*.tfvars
 !environments/template.tfvars
 .playwright-mcp/
 firebase-debug.log
+node_modules/
+bun.lock*
+dist/
+.muavin/

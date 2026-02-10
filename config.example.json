@@ -1,0 +1,37 @@
+{
+  "owner": 0,
+  "allowUsers": [],
+  "allowGroups": [],
+  "cron": [
+    {
+      "id": "morning-briefing",
+      "prompt": "Morning briefing. Check what's on the calendar today, check reminders, review goals from memory. Be brief. If nothing notable, respond with just SKIP.",
+      "intervalMinutes": 1440,
+      "activeHours": [7, 9]
+    },
+    {
+      "id": "checkin",
+      "prompt": "Quick check: anything needing attention in the next 2 hours? Check calendar, reminders. If nothing urgent, respond with SKIP.",
+      "intervalMinutes": 60,
+      "activeHours": [9, 22]
+    },
+    {
+      "id": "memory-sync",
+      "intervalMinutes": 360,
+      "activeHours": [0, 24],
+      "action": "sync-memory"
+    },
+    {
+      "id": "memory-health",
+      "intervalMinutes": 1440,
+      "activeHours": [9, 10],
+      "action": "memory-health"
+    },
+    {
+      "id": "memory-extraction",
+      "action": "extract-memories",
+      "intervalMinutes": 120,
+      "activeHours": [0, 24]
+    }
+  ]
+}

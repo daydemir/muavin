@@ -1,0 +1,19 @@
+{
+  "name": "muavin",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "relay": "bun run src/relay.ts",
+    "cron": "bun run src/cron.ts",
+    "dev": "bun run --watch src/relay.ts",
+    "muavin": "bun run src/cli.ts"
+  },
+  "dependencies": {
+    "grammy": "^1.21.1",
+    "@supabase/supabase-js": "^2.45.0",
+    "openai": "^4.73.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
