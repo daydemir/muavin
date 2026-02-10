@@ -6,27 +6,6 @@
   "claudeTimeoutMs": 43200000,
   "agentMaxTurns": 25,
   "agentTimeoutMs": 600000,
-  "startOnLogin": true,
-  "cron": [
-    {
-      "id": "memory-sync",
-      "action": "sync-memory",
-      "schedule": "0 */6 * * *"
-    },
-    {
-      "id": "memory-health",
-      "action": "memory-health",
-      "schedule": "0 9 * * *"
-    },
-    {
-      "id": "memory-extraction",
-      "action": "extract-memories",
-      "schedule": "0 */2 * * *"
-    },
-    {
-      "id": "agent-cleanup",
-      "action": "cleanup-agents",
-      "schedule": "0 3 * * *"
-    }
-  ]
+  "recentMessageCount": 10,
+  "startOnLogin": true
 }

@@ -1,7 +1,7 @@
 import { readFile, writeFile, readdir, mkdir, unlink, rename } from "fs/promises";
 import { join } from "path";
+import { MUAVIN_DIR, loadJson, timeAgo } from "./utils";
 
-const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
 
 export interface AgentFile {
@@ -144,43 +144,39 @@ export async function getAgentSummary(): Promise<string> {
 }
 
 export async function getJobsSummary(): Promise<string> {
-  const configPath = join(MUAVIN_DIR, "config.json");
   const jobsPath = join(MUAVIN_DIR, "jobs.json");
   const cronStatePath = join(MUAVIN_DIR, "cron-state.json");
 
   const lines: string[] = [];
 
   try {
-    // Load system jobs
-    const config = JSON.parse(await readFile(configPath, "utf-8"));
-    const systemJobs: Array<{ id: string; schedule: string; action?: string; prompt?: string }> = config.cron ?? [];
+    // Load all jobs from jobs.json
+    const allJobs = await loadJson<Array<{
+      id: string;
+      name: string;
+      schedule: string;
+      action?: string;
+      prompt?: string;
+      system?: boolean;
+      enabled: boolean;
+    }>>(jobsPath);
 
-    // Load user jobs
-    let userJobs: Array<{ id: string; name: string; schedule: string; prompt: string; enabled?: boolean }> = [];
-    try {
-      userJobs = JSON.parse(await readFile(jobsPath, "utf-8"));
-      userJobs = userJobs.filter(j => j.enabled !== false);
-    } catch {}
+    if (!allJobs || allJobs.length === 0) return "";
+
+    // Filter enabled jobs
+    const jobs = allJobs.filter(j => j.enabled);
 
     // Load cron state for last run times
-    let cronState: Record<string, number> = {};
-    try {
-      cronState = JSON.parse(await readFile(cronStatePath, "utf-8"));
-    } catch {}
+    const cronState = await loadJson<Record<string, number>>(cronStatePath) ?? {};
 
-    if (systemJobs.length === 0 && userJobs.length === 0) return "";
+    if (jobs.length === 0) return "";
 
     lines.push("[Active Jobs]");
-    for (const job of systemJobs) {
+    for (const job of jobs) {
       const lastRun = cronState[job.id];
-      const lastRunStr = lastRun ? `last: ${timeAgoShort(lastRun)}` : "never run";
-      const label = job.action ?? "custom prompt";
-      lines.push(`  ${job.id} (system, ${label}) — ${job.schedule} — ${lastRunStr}`);
-    }
-    for (const job of userJobs) {
-      const lastRun = cronState[job.id];
-      const lastRunStr = lastRun ? `last: ${timeAgoShort(lastRun)}` : "never run";
-      lines.push(`  ${job.name || job.id} (user) — ${job.schedule} — ${lastRunStr}`);
+      const lastRunStr = lastRun ? `last: ${timeAgo(lastRun)}` : "never run";
+      const label = job.system ? `system, ${job.action ?? "custom prompt"}` : "user";
+      lines.push(`  ${job.name || job.id} (${label}) — ${job.schedule} — ${lastRunStr}`);
     }
   } catch {
     return "";
@@ -189,23 +185,50 @@ export async function getJobsSummary(): Promise<string> {
   return lines.join("\n");
 }
 
-function timeAgoShort(ts: number): string {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-export async function buildSessionContext(): Promise<string | undefined> {
+export async function buildContext(opts: {
+  query: string;
+  chatId?: string;
+  recentCount?: number;
+}): Promise<string> {
   const parts: string[] = [];
+
+  // 1. Read muavin.md
+  try {
+    const muavinMd = await readFile(join(MUAVIN_DIR, "muavin.md"), "utf-8");
+    parts.push(muavinMd.trim());
+  } catch {}
+
+  // 2. Semantic memory search
+  const { searchContext } = await import("./memory");
+  const contextResults = await searchContext(opts.query, 3).catch(() => []);
+  if (contextResults.length > 0) {
+    const contextStr = contextResults
+      .map((r) => `[${r.source}] ${r.content}`)
+      .join("\n");
+    parts.push(`[Memory]\n${contextStr}`);
+  }
+
+  // 3. Recent messages (if chatId provided)
+  if (opts.chatId && opts.recentCount) {
+    const { getRecentMessages } = await import("./memory");
+    const recent = await getRecentMessages(opts.chatId, opts.recentCount).catch(() => []);
+    if (recent.length > 0) {
+      const recentStr = recent
+        .map((m) => `${m.role}: ${m.content}`)
+        .join("\n");
+      parts.push(`[Recent Messages]\n${recentStr}`);
+    }
+  }
+
+  // 4. Agent summary
   const agentSummary = await getAgentSummary();
   if (agentSummary) parts.push(agentSummary);
+
+  // 5. Jobs summary
   const jobsSummary = await getJobsSummary();
   if (jobsSummary) parts.push(jobsSummary);
-  return parts.length > 0 ? parts.join("\n\n") : undefined;
+
+  return parts.join("\n\n");
 }
 
 export async function cleanupAgents(maxAgeMs: number): Promise<number> {

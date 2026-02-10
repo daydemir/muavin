@@ -57,10 +57,10 @@ bun muavin test      # Run smoke tests
 Muavin runs as three macOS launchd daemons:
 
 - **Relay** — Grammy Telegram bot (KeepAlive). Receives messages, vector-searches Supabase for context, spawns `claude` CLI, returns response.
-- **Cron** — Runs every 15 minutes. Executes scheduled jobs from `config.json`: memory extraction (every 2h), MEMORY.md sync (every 6h), health audit (daily), and custom prompts.
+- **Cron** — Runs every 15 minutes. Executes scheduled jobs from `config.json`: memory extraction (every 2h), health audit (daily), and custom prompts.
 - **Heartbeat** — Runs every 30 minutes. Checks relay, cron, Supabase, OpenAI, Telegram. Sends alerts with 2h dedup.
 
-**Memory**: Conversations are stored in Supabase with OpenAI embeddings. A cron job extracts facts every 2h and deduplicates against existing memories. MEMORY.md syncs bidirectionally with the vector DB every 6h.
+**Memory**: Conversations are stored in Supabase with OpenAI embeddings. A cron job extracts facts every 2h and deduplicates against existing memories. Relevant context is vector-searched and injected into every conversation.
 
 ## Configuration
 

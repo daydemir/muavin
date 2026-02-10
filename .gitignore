@@ -1,5 +1,5 @@
 .env
-docs/
+/docs/
 .playwright-mcp/
 firebase-debug.log
 node_modules/

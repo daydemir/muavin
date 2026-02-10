@@ -9,7 +9,7 @@ import {
   getAgent,
   updateAgent,
   listAgents,
-  buildSessionContext,
+  buildContext,
   type AgentFile,
 } from "./agents";
 
@@ -82,11 +82,8 @@ const agentTimeoutMs = config.agentTimeoutMs ?? 600000;
 // ── Core logic ──────────────────────────────────────────────────
 
 async function processAgents(): Promise<boolean> {
-  console.log(`${timestamp()} processAgents: starting`);
-
   // Check for status updates on running agents
   const runningAgents = await listAgents({ status: "running" });
-  console.log(`${timestamp()} Found ${runningAgents.length} running agents`);
 
   for (const agent of runningAgents) {
     const startedAt = agent.startedAt
@@ -106,7 +103,6 @@ async function processAgents(): Promise<boolean> {
       const elapsedMin = Math.floor(elapsed / 1000 / 60);
       const statusMsg = `Your background task '${agent.task}' is still running (${elapsedMin} minutes elapsed)...`;
 
-      console.log(`${timestamp()} Sending status update for agent ${agent.id}`);
       await sendTelegram(agent.chatId, statusMsg);
       await updateAgent(agent.id, { lastStatusAt: new Date().toISOString() });
     }
@@ -134,11 +130,8 @@ async function processAgents(): Promise<boolean> {
 
   // Process pending agents
   const pendingAgents = await listAgents({ status: "pending" });
-  console.log(`${timestamp()} Found ${pendingAgents.length} pending agents`);
 
   for (const agent of pendingAgents) {
-    console.log(`${timestamp()} Processing agent ${agent.id}: ${agent.task}`);
-
     try {
       // Mark as running
       await updateAgent(agent.id, {
@@ -148,19 +141,16 @@ async function processAgents(): Promise<boolean> {
       });
 
       // Execute the agent prompt
-      console.log(
-        `${timestamp()} Calling Claude for agent ${agent.id} (maxTurns: ${agentMaxTurns}, timeout: ${agentTimeoutMs}ms)`,
-      );
-      const sessionContext = await buildSessionContext();
+      const appendSystemPrompt = await buildContext({ query: agent.task });
       const result = await callClaude(agent.prompt, {
         noSessionPersistence: true,
         timeoutMs: agentTimeoutMs,
         maxTurns: agentMaxTurns,
-        appendSystemPrompt: sessionContext,
+        appendSystemPrompt,
       });
 
       console.log(
-        `${timestamp()} Agent ${agent.id} completed: ${result.text.length} chars, cost: $${result.costUsd.toFixed(4)}`,
+        `${timestamp()} Agent ${agent.id} completed`,
       );
 
       // Mark as completed
@@ -171,7 +161,6 @@ async function processAgents(): Promise<boolean> {
       });
 
       // Deliver via stateless Claude
-      console.log(`${timestamp()} Fetching context for delivery`);
       const recentMessages = await searchContext(agent.task, 5).catch(() => []);
 
       const contextStr =
@@ -186,30 +175,25 @@ async function processAgents(): Promise<boolean> {
         .replace("{{CONTEXT}}", contextStr)
         .replace("{{RESULTS}}", result.text);
 
-      console.log(`${timestamp()} Calling Claude for delivery`);
-      const deliverySessionContext = await buildSessionContext();
+      const deliveryContext = await buildContext({ query: agent.task });
       const deliveryResult = await callClaude(deliveryPrompt, {
         noSessionPersistence: true,
-        appendSystemPrompt: deliverySessionContext,
+        appendSystemPrompt: deliveryContext,
       });
 
-      // Save delivered result
-      await updateAgent(agent.id, { deliveredResult: deliveryResult.text });
+      const deliveryText = deliveryResult.text.trim();
 
-      // Send to Telegram
-      console.log(
-        `${timestamp()} Sending delivery to Telegram (chatId: ${agent.chatId})`,
-      );
-      await sendTelegram(agent.chatId, deliveryResult.text, {
-        parseMode: "Markdown",
-      });
-
-      // Log to memory
-      logMessage("assistant", deliveryResult.text, String(agent.chatId)).catch(
-        (e) => console.error(`${timestamp()} logMessage failed:`, e),
-      );
-
-      console.log(`${timestamp()} Agent ${agent.id} fully delivered`);
+      if (deliveryText === "SKIP") {
+        await updateAgent(agent.id, { deliveredResult: "SKIP" });
+      } else {
+        await updateAgent(agent.id, { deliveredResult: deliveryText });
+        await sendTelegram(agent.chatId, deliveryText, {
+          parseMode: "Markdown",
+        });
+        logMessage("assistant", deliveryText, String(agent.chatId)).catch(
+          (e) => console.error(`${timestamp()} logMessage failed:`, e),
+        );
+      }
     } catch (error) {
       const errorMsg =
         error instanceof Error ? error.message : "Unknown error";
@@ -230,9 +214,6 @@ async function processAgents(): Promise<boolean> {
 
   // Return true if there was any activity
   const hadActivity = pendingAgents.length > 0 || runningAgents.length > 0;
-  console.log(
-    `${timestamp()} processAgents: completed (hadActivity: ${hadActivity})`,
-  );
   return hadActivity;
 }
 
@@ -249,9 +230,6 @@ async function main() {
 
         if (!hadActivity) {
           idleChecks++;
-          console.log(
-            `${timestamp()} Idle check ${idleChecks}/3, sleeping 30s`,
-          );
 
           if (idleChecks >= 3) {
             console.log(`${timestamp()} No activity for 3 checks, exiting`);
@@ -259,18 +237,15 @@ async function main() {
           }
         } else {
           idleChecks = 0;
-          console.log(`${timestamp()} Activity detected, resetting idle checks`);
         }
 
         await new Promise((resolve) => setTimeout(resolve, 30_000));
       }
     } else {
-      console.log(`${timestamp()} Single run mode`);
       await processAgents();
     }
   } finally {
     await releaseLock();
-    console.log(`${timestamp()} Shutdown complete`);
   }
 }
 
@@ -287,9 +262,6 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 // ── Start ───────────────────────────────────────────────────────
 
 console.log(`${timestamp()} Starting agent runner (loop: ${loopMode})`);
-console.log(
-  `${timestamp()} Config: maxTurns=${agentMaxTurns}, timeout=${agentTimeoutMs}ms`,
-);
 
 main().catch((error) => {
   console.error(`${timestamp()} Fatal error:`, error);

@@ -3,8 +3,8 @@ import { Bot, type Context } from "grammy";
 import { writeFile, readFile, unlink, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import { callClaude } from "./claude";
-import { logMessage, searchContext } from "./memory";
-import { buildSessionContext } from "./agents";
+import { logMessage } from "./memory";
+import { buildContext } from "./agents";
 
 validateEnv();
 
@@ -103,7 +103,6 @@ const queue: Array<() => Promise<void>> = [];
 let processing = false;
 
 async function enqueue(fn: () => Promise<void>): Promise<void> {
-  const timestamp = () => `[relay ${new Date().toISOString()}]`;
   return new Promise((resolve, reject) => {
     queue.push(async () => {
       try {
@@ -113,27 +112,20 @@ async function enqueue(fn: () => Promise<void>): Promise<void> {
         reject(e);
       }
     });
-    console.log(`${timestamp()} Task enqueued, queue length: ${queue.length}`);
     processQueue();
   });
 }
 
 async function processQueue(): Promise<void> {
-  const timestamp = () => `[relay ${new Date().toISOString()}]`;
   if (processing) {
-    console.log(`${timestamp()} processQueue: already processing, returning`);
     return;
   }
   processing = true;
-  console.log(`${timestamp()} processQueue: starting, queue length: ${queue.length}`);
   while (queue.length > 0) {
     const task = queue.shift()!;
-    console.log(`${timestamp()} processQueue: executing task, ${queue.length} remaining`);
     await task();
-    console.log(`${timestamp()} processQueue: task completed`);
   }
   processing = false;
-  console.log(`${timestamp()} processQueue: finished, queue empty`);
 }
 
 // ── Bot setup ───────────────────────────────────────────────
@@ -188,44 +180,21 @@ bot.command("status", async (ctx) => {
 // ── Core message handler ────────────────────────────────────
 
 async function handleMessage(ctx: Context, prompt: string): Promise<void> {
-  const timestamp = () => `[relay ${new Date().toISOString()}]`;
-  const startTime = Date.now();
-
-  console.log(`${timestamp()} handleMessage entered with prompt: ${prompt.slice(0, 200)}${prompt.length > 200 ? '...' : ''}`);
-  console.log(`${timestamp()} Sending initial typing action`);
-
   await ctx.replyWithChatAction("typing");
 
-  console.log(`${timestamp()} Enqueueing task`);
-
   await enqueue(async () => {
-    console.log(`${timestamp()} Task started in queue`);
     const typingInterval = setInterval(() => {
       ctx.replyWithChatAction("typing").catch(() => {});
     }, 4000);
 
     try {
-      // Search for relevant past context
-      console.log(`${timestamp()} Searching context for prompt`);
-      const contextStartTime = Date.now();
-      const contextResults = await searchContext(prompt, 3).catch(() => []);
-      const contextElapsed = Date.now() - contextStartTime;
-      console.log(`${timestamp()} Context search completed in ${contextElapsed}ms, found ${contextResults.length} results`);
-
-      let appendSystemPrompt: string | undefined;
-
-      if (contextResults.length > 0) {
-        const contextStr = contextResults
-          .map((r) => `[${r.source}] ${r.content}`)
-          .join("\n");
-        appendSystemPrompt = `Relevant past context:\n${contextStr}`;
-        console.log(`${timestamp()} Using appendSystemPrompt with ${contextStr.length} chars`);
-      }
-
-      const sessionContext = await buildSessionContext();
-      if (sessionContext) {
-        appendSystemPrompt = (appendSystemPrompt ? appendSystemPrompt + "\n\n" : "") + sessionContext;
-      }
+      // Build context
+      const numericChatId = ctx.chat?.id ?? 0;
+      const appendSystemPrompt = await buildContext({
+        query: prompt,
+        chatId: String(numericChatId),
+        recentCount: config.recentMessageCount ?? 10,
+      });
 
       // Build prompt with time context
       const now = new Date();
@@ -241,7 +210,6 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
 
       const chatType = ctx.chat?.type ?? "private";
       const senderName = ctx.from?.first_name ?? "User";
-      const numericChatId = ctx.chat?.id ?? 0;
       let fullPrompt = `Current time: ${timeStr}\nChannel: ${chatType}`;
       if (chatType !== "private") {
         fullPrompt += `\nSender: ${senderName}\nNote: Address ${senderName} by name. Be concise in group chats.`;
@@ -249,65 +217,42 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
       fullPrompt += `\n\n${prompt}`;
       fullPrompt += `\nChatId: ${numericChatId}`;
 
-      console.log(`${timestamp()} Full prompt built (${fullPrompt.length} chars): ${fullPrompt.slice(0, 300)}${fullPrompt.length > 300 ? '...' : ''}`);
-
       const chatId = String(ctx.chat?.id ?? "unknown");
       const session = getSession(sessions, chatId);
 
-      console.log(`${timestamp()} Session state: chatId=${chatId}, sessionId=${session.sessionId?.slice(0, 8) ?? 'null'}, updatedAt=${session.updatedAt}`);
-      console.log(`${timestamp()} Calling callClaude with timeout=${config.claudeTimeoutMs}ms`);
-
-      const claudeStartTime = Date.now();
       const result = await callClaude(fullPrompt, {
         resume: session.sessionId ?? undefined,
         appendSystemPrompt,
         timeoutMs: config.claudeTimeoutMs,
       });
-      const claudeElapsed = Date.now() - claudeStartTime;
-
-      console.log(`${timestamp()} callClaude returned in ${claudeElapsed}ms: text length=${result.text.length}, sessionId=${result.sessionId.slice(0, 8)}, cost=$${result.costUsd.toFixed(4)}, duration=${result.durationMs}ms`);
 
       // Save session
-      console.log(`${timestamp()} Saving session state`);
       sessions[chatId] = {
         sessionId: result.sessionId,
         updatedAt: new Date().toISOString(),
       };
       await saveSessions(sessions);
-      console.log(`${timestamp()} Session saved`);
 
       // Log messages async (don't block reply)
-      console.log(`${timestamp()} Logging messages to memory`);
       logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
       logMessage("assistant", result.text, chatId).catch(e => console.error('logMessage failed:', e));
 
-      console.log(`${timestamp()} Sending response (${result.text.length} chars)`);
       await sendResponse(ctx, result.text);
-
-      const totalElapsed = Date.now() - startTime;
-      console.log(`${timestamp()} handleMessage completed in ${totalElapsed}ms total`);
     } catch (error) {
-      console.error(`${timestamp()} ERROR in handleMessage:`, error);
-      if (error instanceof Error) {
-        console.error(`${timestamp()} Error stack:`, error.stack);
-      }
+      console.error("Error in handleMessage:", error);
       await ctx.reply(
         `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
       );
     } finally {
       clearInterval(typingInterval);
-      console.log(`${timestamp()} Typing interval cleared`);
     }
   });
-
-  console.log(`${timestamp()} handleMessage enqueue promise resolved`);
 }
 
 // ── Text messages ───────────────────────────────────────────
 
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
-  console.log(`Message: ${text.slice(0, 80)}`);
 
   // Group mention detection
   const chatType = ctx.chat?.type;
@@ -323,7 +268,6 @@ bot.on("message:text", async (ctx) => {
 // ── Photos ──────────────────────────────────────────────────
 
 bot.on("message:photo", async (ctx) => {
-  console.log("Photo received");
   try {
     const photos = ctx.message.photo;
     const photo = photos[photos.length - 1];
@@ -348,7 +292,6 @@ bot.on("message:photo", async (ctx) => {
 
 bot.on("message:document", async (ctx) => {
   const doc = ctx.message.document;
-  console.log(`Document: ${doc.file_name}`);
   try {
     const file = await ctx.getFile();
     const fileName = doc.file_name || `file_${Date.now()}`;
@@ -379,25 +322,16 @@ bot.on("message:voice", async (ctx) => {
 // ── Response chunking ───────────────────────────────────────
 
 async function sendResponse(ctx: Context, response: string): Promise<void> {
-  const timestamp = () => `[relay ${new Date().toISOString()}]`;
-  console.log(`${timestamp()} sendResponse called with ${response.length} chars`);
-
   const MAX = 4000;
   if (response.length <= MAX) {
-    console.log(`${timestamp()} Sending single message`);
     await ctx.reply(response, { parse_mode: "Markdown" });
-    console.log(`${timestamp()} Message sent successfully`);
     return;
   }
 
-  console.log(`${timestamp()} Message exceeds ${MAX} chars, chunking`);
   let remaining = response;
-  let chunkNum = 0;
   while (remaining.length > 0) {
     if (remaining.length <= MAX) {
-      console.log(`${timestamp()} Sending final chunk ${++chunkNum}`);
       await ctx.reply(remaining, { parse_mode: "Markdown" });
-      console.log(`${timestamp()} Final chunk sent`);
       break;
     }
     let idx = remaining.lastIndexOf("\n\n", MAX);
@@ -405,12 +339,9 @@ async function sendResponse(ctx: Context, response: string): Promise<void> {
     if (idx <= 0) idx = remaining.lastIndexOf(" ", MAX);
     if (idx <= 0) idx = MAX;
 
-    console.log(`${timestamp()} Sending chunk ${++chunkNum} (${idx} chars)`);
     await ctx.reply(remaining.slice(0, idx), { parse_mode: "Markdown" });
     remaining = remaining.slice(idx).trim();
-    console.log(`${timestamp()} Chunk ${chunkNum} sent, ${remaining.length} chars remaining`);
   }
-  console.log(`${timestamp()} sendResponse completed, sent ${chunkNum} chunks`);
 }
 
 // ── Graceful shutdown ───────────────────────────────────────
@@ -427,12 +358,8 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 // ── Start ───────────────────────────────────────────────────
 
 console.log("Starting Muavin relay...");
-console.log(`Allowed users: ${[...allowUsers].join(", ")}`);
-console.log(`Allowed groups: ${[...allowGroups].join(", ")}`);
 
-bot.start({
-  onStart: () => console.log("Muavin is running!"),
-}).catch((err) => {
+bot.start().catch((err) => {
   console.error("bot.start() fatal:", err);
   unlink(LOCK_FILE).catch(() => {});
   process.exit(1);

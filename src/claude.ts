@@ -36,12 +36,6 @@ export async function callClaude(prompt: string, opts?: {
   timeoutMs?: number;
   cwd?: string;
 }): Promise<ClaudeResult> {
-  const startTime = Date.now();
-  const timestamp = () => `[claude ${new Date().toISOString()}]`;
-
-  console.log(`${timestamp()} callClaude invoked with prompt length: ${prompt.length} chars`);
-  console.log(`${timestamp()} Options: resume=${opts?.resume?.slice(0, 8) ?? 'none'}, appendSystemPrompt=${opts?.appendSystemPrompt ? 'yes' : 'no'}, timeoutMs=${opts?.timeoutMs ?? 'none'}`);
-
   const args = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"];
 
   if (configModel) args.push("--model", configModel);
@@ -51,8 +45,6 @@ export async function callClaude(prompt: string, opts?: {
   if (opts?.noSessionPersistence) args.push("--no-session-persistence");
   if (opts?.maxTurns) args.push("--max-turns", String(opts.maxTurns));
 
-  console.log(`${timestamp()} Spawning Claude with args:`, args);
-
   const proc = spawn(args, {
     stdout: "pipe",
     stderr: "pipe",
@@ -61,35 +53,23 @@ export async function callClaude(prompt: string, opts?: {
     cwd: opts?.cwd ?? join(homedir(), ".muavin"),
   });
 
-  console.log(`${timestamp()} Process spawned, writing ${prompt.length} chars to stdin`);
   proc.stdin.write(prompt);
-  console.log(`${timestamp()} stdin.write() completed, calling stdin.end()`);
   proc.stdin.end();
-  console.log(`${timestamp()} stdin.end() completed, waiting for process output`);
 
   const processPromise = (async () => {
-    console.log(`${timestamp()} Starting to read stdout and stderr`);
     const stdout = await new Response(proc.stdout).text();
-    console.log(`${timestamp()} stdout received (${stdout.length} chars): ${stdout.slice(0, 500)}${stdout.length > 500 ? '...' : ''}`);
-
     const stderr = await new Response(proc.stderr).text();
-    console.log(`${timestamp()} stderr received (${stderr.length} chars): ${stderr.slice(0, 500)}${stderr.length > 500 ? '...' : ''}`);
-
     const exitCode = await proc.exited;
-    console.log(`${timestamp()} Process exited with code: ${exitCode}`);
 
     if (exitCode !== 0) {
-      console.error(`${timestamp()} Non-zero exit code, throwing error`);
       throw new Error(`Claude exited ${exitCode}: ${stderr}`);
     }
 
-    console.log(`${timestamp()} Attempting to parse JSON from stdout`);
     let parsed;
     try {
       parsed = JSON.parse(stdout);
-      console.log(`${timestamp()} JSON parse successful, keys: ${Object.keys(parsed).join(', ')}`);
     } catch (e) {
-      console.error(`${timestamp()} JSON parse failed:`, e);
+      console.error("JSON parse failed:", e);
       throw e;
     }
 
@@ -100,17 +80,12 @@ export async function callClaude(prompt: string, opts?: {
       durationMs: parsed.duration_ms ?? 0,
     };
 
-    const elapsed = Date.now() - startTime;
-    console.log(`${timestamp()} callClaude completed in ${elapsed}ms, returning text length: ${result.text.length} chars`);
-
     return result;
   })();
 
   if (opts?.timeoutMs) {
-    console.log(`${timestamp()} Setting timeout for ${opts.timeoutMs}ms`);
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
-        console.log(`${timestamp()} TIMEOUT TRIGGERED after ${opts.timeoutMs}ms, killing process`);
         proc.kill();
         const hours = Math.floor(opts.timeoutMs! / 3600000);
         const minutes = Math.floor((opts.timeoutMs! % 3600000) / 60000);

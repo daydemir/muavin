@@ -3,30 +3,32 @@
 Personal AI assistant that communicates via Telegram. Runs headlessly on macOS.
 
 ## Architecture
-- 3 launchd daemons: relay (Telegram bot), cron (15min scheduler), heartbeat (30min health checks)
+- 3 launchd daemons: relay (Telegram bot), cron (wakes every 15min, evaluates job schedules), heartbeat (30min health checks)
 - Claude CLI spawned as subprocess via `src/claude.ts` with configurable cwd
 - Memory: Supabase pgvector (messages + extracted facts)
 - Background agents: JSON files in `~/.muavin/agents/`, processed by `src/agent-runner.ts`
 
 ## Key Files
 - `src/relay.ts` — Telegram bot (Grammy)
-- `src/cron.ts` — Scheduled job runner (system jobs from config.json + user jobs from jobs.json)
+- `src/cron.ts` — Scheduled job runner (reads jobs.json, wakes every 15min)
 - `src/heartbeat.ts` — Health monitoring with AI-triaged alerts
 - `src/claude.ts` — Claude CLI spawner
-- `src/memory.ts` — Supabase vector search + memory extraction
-- `src/agents.ts` — Agent CRUD + session context builder
+- `src/memory.ts` — Supabase vector search + memory extraction + generation
+- `src/agents.ts` — Agent CRUD, context builder (`buildContext()`), jobs/agent summaries
 - `src/agent-runner.ts` — Background agent executor
-- `src/cli.ts` — Setup, deploy, status, config CLI
+- `src/cli.ts` — Setup, deploy, status, config, agent CLI
+- `src/utils.ts` — Shared utilities (lock, JSON I/O, config, timestamps)
 - `src/telegram.ts` — Telegram send + pending alert queue
 
 ## Runtime Layout
 - `~/.muavin/` — Config, state, sessions (interactive Claude sessions run here → has CLAUDE.md)
-- `~/.muavin/system/` — Empty dir for utility sessions (no CLAUDE.md → clean JSON output)
+- `~/.muavin/muavin.md` — Lean identity file (injected via --append-system-prompt)
+- `~/.muavin/docs/` — Reference docs (behavior.md, jobs.md, agents.md, skills.md)
+- `~/.muavin/jobs.json` — ALL jobs (system + user, unified)
 - `~/.muavin/prompts/` — Prompt templates read by memory.ts, heartbeat.ts, agent-runner.ts
-- `~/.muavin/jobs.json` — User-managed scheduled jobs
 - `~/.muavin/skills/` — Skill files (created by Muavin at runtime)
-- `~/.muavin/USER.md` — User context file
-- `CLAUDE.example.md` — Template for `~/.muavin/CLAUDE.md` (copied on setup)
+- `~/.muavin/agents/` — Agent JSON files
+- `templates/` — Source templates for setup (CLAUDE.md, muavin.md, docs/)
 
 ## Running
 - `bun muavin setup` — Interactive setup wizard

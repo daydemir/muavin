@@ -1,11 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
-import { readFile, readdir, writeFile, mkdir } from "fs/promises";
+import { readFile, mkdir } from "fs/promises";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { createHash } from "crypto";
 import { callClaude } from "./claude";
 import { sendTelegram } from "./telegram";
+import { loadConfig } from "./utils";
 
 const SYSTEM_CWD = join(process.env.HOME ?? "~", ".muavin", "system");
 const PROMPTS_DIR = join(process.env.HOME ?? "~", ".muavin", "prompts");
@@ -28,56 +28,13 @@ export const supabase = createClient(
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
-const CRON_STATE_PATH = join(MUAVIN_DIR, "cron-state.json");
-const CONFIG_PATH = join(MUAVIN_DIR, "config.json");
-
-interface CronState {
-  memory_md_hash?: string;
-  [key: string]: unknown;
-}
-
-interface Config {
-  owner: number;
-  [key: string]: unknown;
-}
-
-async function loadCronState(): Promise<CronState> {
-  try {
-    const content = await readFile(CRON_STATE_PATH, "utf-8");
-    return JSON.parse(content);
-  } catch {
-    return {};
-  }
-}
-
-async function saveCronState(state: CronState): Promise<void> {
-  await mkdir(MUAVIN_DIR, { recursive: true });
-  await writeFile(CRON_STATE_PATH, JSON.stringify(state, null, 2));
-}
-
-async function loadConfig(): Promise<Config> {
-  const content = await readFile(CONFIG_PATH, "utf-8");
-  return JSON.parse(content);
-}
 
 export async function embed(text: string): Promise<number[]> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: text,
-      });
-      return res.data[0].embedding;
-    } catch (e) {
-      if (attempt < 2) {
-        await new Promise(r => setTimeout(r, 1000));
-        continue;
-      }
-      console.error(`embed failed after 3 attempts: "${text.slice(0, 80)}..."`, e);
-      throw e;
-    }
-  }
-  throw new Error("unreachable");
+  const res = await openai.embeddings.create({
+    model: "text-embedding-3-small",
+    input: text,
+  });
+  return res.data[0].embedding;
 }
 
 export async function logMessage(
@@ -242,121 +199,19 @@ export async function extractMemories(): Promise<number> {
   return extracted;
 }
 
-async function findClaudeMemoryPath(): Promise<string | null> {
-  const claudeProjectsDir = join(process.env.HOME ?? "~", ".claude", "projects");
-  try {
-    const dirs = await readdir(claudeProjectsDir);
-    for (const dir of dirs) {
-      const memoryPath = join(claudeProjectsDir, dir, "memory", "MEMORY.md");
-      try {
-        await readFile(memoryPath);
-        return memoryPath;
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
+export async function getRecentMessages(
+  chatId: string,
+  limit: number,
+): Promise<Array<{ role: string; content: string; created_at: string }>> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("role, content, created_at")
+    .eq("chat_id", chatId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
 
-export async function syncMemoryMd(projectDir: string): Promise<number> {
-  // Phase 1: Harvest new entries from MEMORY.md
-  const claudeMemoryPath = await findClaudeMemoryPath();
-  const memoryPaths = [
-    ...(claudeMemoryPath ? [claudeMemoryPath] : []),
-    join(projectDir, "MEMORY.md"),
-  ];
-
-  let content = "";
-  let memoryMdPath = "";
-  for (const p of memoryPaths) {
-    try {
-      content = await readFile(p, "utf-8");
-      memoryMdPath = p;
-      break;
-    } catch {
-      continue;
-    }
-  }
-
-  // Load cron state to check for previously regenerated content
-  const cronState = await loadCronState();
-  const previousHash = cronState.memory_md_hash ?? "";
-
-  // If the file is unchanged from what we generated, skip harvest
-  const currentHash = createHash("sha256").update(content).digest("hex");
-  const fileWasModified = currentHash !== previousHash;
-
-  // Parse entries: each non-empty line is an entry
-  const entries = content
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#"));
-
-  let synced = 0;
-  if (fileWasModified) {
-    for (const entry of entries) {
-      const hash = createHash("sha256").update(entry).digest("hex").slice(0, 16);
-
-      // Check if already exists by source hash
-      const { data: existing } = await supabase
-        .from("memory")
-        .select("id")
-        .eq("source", `memory_md:${hash}`)
-        .limit(1);
-
-      if (existing && existing.length > 0) continue;
-
-      const embedding = await embed(entry).catch((e) => { console.error("syncMemoryMd embed failed:", e); return null; });
-      await supabase.from("memory").insert({
-        type: "personal_fact",
-        content: entry,
-        source: `memory_md:${hash}`,
-        embedding,
-      });
-      synced++;
-    }
-  }
-
-  // Phase 2: Regenerate MEMORY.md from Supabase
-  if (memoryMdPath) {
-    const { data: memories } = await supabase
-      .from("memory")
-      .select("type, content")
-      .eq("stale", false)
-      .order("created_at", { ascending: false })
-      .limit(50);
-
-    if (memories && memories.length > 0) {
-      // Group by type
-      const byType: Record<string, string[]> = {};
-      for (const m of memories) {
-        const type = m.type ?? "other";
-        if (!byType[type]) byType[type] = [];
-        byType[type].push(m.content);
-      }
-
-      // Generate organized content
-      let regenerated = "# Muavin Memory\n\n";
-      for (const [type, items] of Object.entries(byType)) {
-        regenerated += `## ${type}\n`;
-        for (const item of items) {
-          regenerated += `${item}\n`;
-        }
-        regenerated += "\n";
-      }
-
-      // Save regenerated content and hash
-      await writeFile(memoryMdPath, regenerated);
-      const newHash = createHash("sha256").update(regenerated).digest("hex");
-      cronState.memory_md_hash = newHash;
-      await saveCronState(cronState);
-    }
-  }
-
-  return synced;
+  if (error || !data) return [];
+  return data.reverse();
 }
 
 interface HealthCheckResult {
@@ -456,10 +311,3 @@ export async function runHealthCheck(): Promise<void> {
   }
 }
 
-// Test block — run with: bun run src/memory.ts
-if (import.meta.main) {
-  console.log("Testing memory system...");
-  await logMessage("user", "Test message from memory.ts", "test");
-  const results = await searchContext("test message");
-  console.log("Search results:", results);
-}

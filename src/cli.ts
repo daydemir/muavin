@@ -35,6 +35,9 @@ async function main() {
     case "stop":
       await stopCommand();
       break;
+    case "agent":
+      await agentCommand();
+      break;
     default:
       heading("Muavin CLI\n");
       console.log("Usage: bun muavin <command>\n");
@@ -45,6 +48,7 @@ async function main() {
       console.log("  stop    - Stop all daemons");
       console.log("  status  - Check daemon and session status");
       console.log("  test    - Run smoke tests");
+      console.log("  agent   - Manage background agents");
       process.exit(0);
   }
 }
@@ -131,10 +135,22 @@ async function setupCommand() {
     return;
   }
 
-  // Step 8: Finalize
-  await copyCLAUDEmd();
+  // Step 8: Store repoPath
+  const { resolve } = await import("path");
+  const repoRoot = resolve(import.meta.dir, "..");
+  try {
+    const currentConfig = JSON.parse(await Bun.file(configPath).text());
+    if (!currentConfig.repoPath) {
+      currentConfig.repoPath = repoRoot;
+      await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
+      ok("Stored repoPath in config");
+    }
+  } catch {}
 
-  // Step 9: Offer deploy
+  // Step 9: Install templates
+  await installTemplates();
+
+  // Step 10: Offer deploy
   const shouldStart = prompt("Start daemons now? (y/n): ");
   if (shouldStart?.toLowerCase() === "y") {
     await deployCommand();
@@ -611,21 +627,43 @@ async function updateMuavinConfig(userId: string) {
   ok("config.json updated (owner + allowUsers)");
 }
 
-async function copyCLAUDEmd() {
+async function installTemplates() {
   const homeDir = process.env.HOME!;
   const muavinDir = `${homeDir}/.muavin`;
-  const destPath = `${muavinDir}/CLAUDE.md`;
+  const templatesDir = `${import.meta.dir}/../templates`;
+  const docsDir = `${muavinDir}/docs`;
 
-  // Only copy if it doesn't already exist
-  if (await Bun.file(destPath).exists()) {
+  await mkdir(docsDir, { recursive: true });
+
+  // Install CLAUDE.md (only if not exists — don't overwrite personality)
+  const claudePath = `${muavinDir}/CLAUDE.md`;
+  if (!(await Bun.file(claudePath).exists())) {
+    const content = await Bun.file(`${templatesDir}/CLAUDE.md`).text();
+    await Bun.write(claudePath, content);
+    ok("Created CLAUDE.md");
+  } else {
     ok("CLAUDE.md already exists");
-    return;
   }
 
-  const examplePath = `${import.meta.dir}/../CLAUDE.example.md`;
-  const example = await Bun.file(examplePath).text();
-  await Bun.write(destPath, example);
-  ok("Created CLAUDE.md from CLAUDE.example.md");
+  // Install muavin.md (always overwrite — identity file)
+  const muavinMdContent = await Bun.file(`${templatesDir}/muavin.md`).text();
+  await Bun.write(`${muavinDir}/muavin.md`, muavinMdContent);
+  ok("Installed muavin.md");
+
+  // Install docs (always overwrite)
+  const docFiles = ["behavior.md", "jobs.md", "agents.md", "skills.md"];
+  for (const doc of docFiles) {
+    const content = await Bun.file(`${templatesDir}/docs/${doc}`).text();
+    await Bun.write(`${docsDir}/${doc}`, content);
+  }
+  ok(`Installed docs/ (${docFiles.length} files)`);
+
+  // Initialize jobs.json if not exists
+  const jobsPath = `${muavinDir}/jobs.json`;
+  if (!(await Bun.file(jobsPath).exists())) {
+    await Bun.write(jobsPath, "[]");
+    ok("Created empty jobs.json");
+  }
 }
 
 function maskValue(value: string): string {
@@ -1127,51 +1165,38 @@ async function statusCommand() {
   console.log();
   heading("Jobs:");
   try {
-    const configFile = Bun.file(`${process.env.HOME}/.muavin/config.json`);
-    const config = await configFile.json();
-    const systemJobs: Array<{ id: string; schedule: string; action?: string; prompt?: string }> = config.cron ?? [];
+    const { loadJson, MUAVIN_DIR: muavinDir } = await import("./utils");
+    const jobsPath = `${muavinDir}/jobs.json`;
+    const allJobs = await loadJson<Array<{ id: string; name?: string; schedule: string; action?: string; prompt?: string; system?: boolean; enabled: boolean }>>(jobsPath);
 
-    let userJobs: Array<{ id: string; name?: string; schedule: string; prompt: string; enabled?: boolean }> = [];
-    try {
-      const jobsFile = Bun.file(`${process.env.HOME}/.muavin/jobs.json`);
-      if (await jobsFile.exists()) {
-        userJobs = await jobsFile.json();
+    if (!allJobs || allJobs.length === 0) {
+      dim("  No jobs configured");
+    } else {
+      const enabled = allJobs.filter(j => j.enabled);
+      const disabled = allJobs.filter(j => !j.enabled);
+      console.log(pc.dim(`  ${enabled.length} enabled${disabled.length > 0 ? `, ${disabled.length} disabled` : ""}`));
+      console.log();
+
+      // Load cron state
+      let cronState: Record<string, number> = {};
+      try {
+        cronState = JSON.parse(await readFile(cronStatePath, "utf-8"));
+      } catch {}
+
+      for (const job of allJobs) {
+        const lastRun = cronState[job.id];
+        const lastStr = lastRun ? timeAgo(lastRun) : "never";
+        const enabledStr = !job.enabled ? pc.yellow("[off]") : job.system ? pc.cyan("[sys]") : pc.green("[on] ");
+        let nextStr = "—";
+        if (job.enabled) {
+          const cron = new Cron(job.schedule);
+          const nextRun = cron.nextRun();
+          nextStr = nextRun ? timeUntil(nextRun.getTime()) : "—";
+        }
+        const name = (job.name || job.id).padEnd(20);
+        const scheduleStr = job.schedule.padEnd(18);
+        console.log(pc.dim(`  ${enabledStr} ${name} ${scheduleStr} last: ${lastStr.padEnd(10)} next: ${nextStr}`));
       }
-    } catch {}
-
-    // Load cron state
-    let cronState: Record<string, number> = {};
-    try {
-      cronState = JSON.parse(await readFile(cronStatePath, "utf-8"));
-    } catch {}
-
-    const enabledUser = userJobs.filter(j => j.enabled !== false);
-    const disabledUser = userJobs.filter(j => j.enabled === false);
-    console.log(pc.dim(`  ${systemJobs.length} system, ${enabledUser.length} user${disabledUser.length > 0 ? ` (${disabledUser.length} disabled)` : ""}`));
-    console.log();
-
-    for (const job of systemJobs) {
-      const lastRun = cronState[job.id];
-      const lastStr = lastRun ? timeAgo(lastRun) : "never";
-      const cron = new Cron(job.schedule);
-      const nextRun = cron.nextRun();
-      const nextStr = nextRun ? timeUntil(nextRun.getTime()) : "—";
-      const label = job.action ?? "prompt";
-      console.log(pc.dim(`  ${pc.cyan("[sys]")} ${job.id.padEnd(20)} ${label.padEnd(18)} last: ${lastStr.padEnd(10)} next: ${nextStr}`));
-    }
-
-    for (const job of userJobs) {
-      const lastRun = cronState[job.id];
-      const lastStr = lastRun ? timeAgo(lastRun) : "never";
-      const enabledStr = job.enabled === false ? pc.yellow("[off]") : pc.green("[on] ");
-      let nextStr = "—";
-      if (job.enabled !== false) {
-        const cron = new Cron(job.schedule);
-        const nextRun = cron.nextRun();
-        nextStr = nextRun ? timeUntil(nextRun.getTime()) : "—";
-      }
-      const name = job.name || job.id;
-      console.log(pc.dim(`  ${enabledStr} ${name.padEnd(20)} ${job.schedule.padEnd(18)} last: ${lastStr.padEnd(10)} next: ${nextStr}`));
     }
   } catch {
     dim("  Error reading jobs");
@@ -1242,6 +1267,70 @@ function timeUntil(ts: number): string {
   return `in ${days}d`;
 }
 
+async function agentCommand() {
+  const subcommand = Bun.argv[3];
+
+  if (subcommand !== "create") {
+    heading("Muavin Agent\n");
+    console.log("Usage: bun muavin agent <command>\n");
+    console.log("Commands:");
+    console.log("  create  - Create a background agent");
+    return;
+  }
+
+  // Parse args
+  const args = Bun.argv.slice(4);
+  let task = "";
+  let agentPrompt = "";
+  let chatId = 0;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--task" && args[i + 1]) task = args[++i];
+    else if (args[i] === "--prompt" && args[i + 1]) agentPrompt = args[++i];
+    else if (args[i] === "--chat-id" && args[i + 1]) chatId = Number(args[++i]);
+  }
+
+  if (!task || !agentPrompt || !chatId) {
+    fail("Usage: bun muavin agent create --task \"...\" --prompt \"...\" --chat-id <id>");
+    return;
+  }
+
+  const { createAgent } = await import("./agents");
+  const agent = await createAgent({ task, prompt: agentPrompt, chatId });
+  ok(`Created agent ${agent.id}: ${agent.task}`);
+
+  // Start runner if not already active
+  const { loadConfig, MUAVIN_DIR } = await import("./utils");
+  const config = await loadConfig();
+  const repoPath = config.repoPath;
+  if (!repoPath) {
+    warn("repoPath not set in config — cannot auto-start runner. Run: bun muavin config");
+    return;
+  }
+
+  const lockFile = `${MUAVIN_DIR}/agent-runner.lock`;
+  let runnerActive = false;
+  try {
+    const pid = parseInt(await (await import("fs/promises")).readFile(lockFile, "utf-8"));
+    process.kill(pid, 0);
+    runnerActive = true;
+  } catch {}
+
+  if (!runnerActive) {
+    const bunPath = Bun.which("bun");
+    if (bunPath) {
+      const logPath = `${process.env.HOME}/Library/Logs/muavin-agents.log`;
+      Bun.spawn([bunPath, "run", `${repoPath}/src/agent-runner.ts`, "--loop"], {
+        stdout: Bun.file(logPath),
+        stderr: Bun.file(logPath),
+      });
+      ok("Started agent runner");
+    }
+  } else {
+    dim("  Agent runner already active");
+  }
+}
+
 async function testCommand() {
   heading("Running smoke tests...\n");
 
@@ -1274,18 +1363,17 @@ async function testCommand() {
   // Test cron config
   heading("Testing cron config...");
   try {
-    const cronFile = Bun.file(`${process.env.HOME}/.muavin/config.json`);
-    const config = await cronFile.json();
-    if (
-      Array.isArray(config.cron) &&
-      config.cron.every((job: any) => job.id && job.schedule)
-    ) {
-      ok(`Cron config valid (${config.cron.length} jobs)`);
+    const { loadJson, MUAVIN_DIR: muavinDir } = await import("./utils");
+    const jobs = await loadJson<Array<{ id: string; schedule: string; enabled: boolean }>>(
+      `${muavinDir}/jobs.json`
+    );
+    if (jobs && jobs.length > 0 && jobs.every((job: any) => job.id && job.schedule)) {
+      ok(`Jobs config valid (${jobs.length} jobs)`);
     } else {
-      fail("Cron config invalid");
+      fail("Jobs config invalid or empty");
     }
   } catch (error) {
-    fail(`Cron test failed: ${error}`);
+    fail(`Jobs test failed: ${error}`);
   }
 }
 
