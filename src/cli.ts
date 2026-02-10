@@ -245,6 +245,30 @@ async function checkPrereqs(): Promise<boolean> {
   }
   ok("node_modules found");
 
+  // Check for claude-code-safety-net plugin
+  try {
+    const settingsPath = `${process.env.HOME}/.claude/settings.json`;
+    const settingsFile = Bun.file(settingsPath);
+    if (await settingsFile.exists()) {
+      const settings = await settingsFile.json();
+      const plugins = settings.enabledPlugins ?? {};
+      const safetyNet = Object.entries(plugins).find(
+        ([key]) => key.includes("safety-net")
+      );
+      if (safetyNet && safetyNet[1] === true) {
+        ok("claude-code-safety-net found");
+      } else {
+        warn("claude-code-safety-net not installed");
+        dim("Run in Claude Code: /plugin marketplace add kenryu42/cc-marketplace && /plugin install safety-net@cc-marketplace");
+      }
+    } else {
+      warn("claude-code-safety-net not installed");
+      dim("Run in Claude Code: /plugin marketplace add kenryu42/cc-marketplace && /plugin install safety-net@cc-marketplace");
+    }
+  } catch {
+    // Non-blocking, skip if settings can't be read
+  }
+
   console.log();
   return true;
 }
@@ -703,7 +727,7 @@ async function testCommand() {
     const config = await cronFile.json();
     if (
       Array.isArray(config.cron) &&
-      config.cron.every((job: any) => job.id && job.intervalMinutes)
+      config.cron.every((job: any) => job.id && job.schedule)
     ) {
       ok(`Cron config valid (${config.cron.length} jobs)`);
     } else {

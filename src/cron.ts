@@ -1,3 +1,4 @@
+import { Cron } from "croner";
 import { validateEnv } from "./env";
 import { readFile, writeFile, mkdir, rename } from "fs/promises";
 import { join } from "path";
@@ -16,8 +17,7 @@ interface CronJob {
   id: string;
   prompt?: string;
   action?: string;
-  intervalMinutes: number;
-  activeHours: [number, number];
+  schedule: string;
 }
 
 interface CronState {
@@ -65,22 +65,16 @@ try {
 const config = JSON.parse(await readFile(configPath, "utf-8"));
 const jobs: CronJob[] = config.cron;
 const state = await loadState();
-const now = Date.now();
-const hour = new Date().getHours();
+const now = new Date();
 
 for (const job of jobs) {
   const lastRun = state[job.id] ?? 0;
-  const dueMs = job.intervalMinutes * 60_000;
+  const cron = new Cron(job.schedule);
+  const nextAfterLast = cron.nextRun(new Date(lastRun));
 
-  // Check active hours
-  if (hour < job.activeHours[0] || hour >= job.activeHours[1]) {
-    console.log(`${job.id}: outside active hours [${job.activeHours}], skipping`);
-    continue;
-  }
-
-  // Check interval
-  if (now - lastRun < dueMs) {
-    console.log(`${job.id}: not due yet (${Math.round((dueMs - (now - lastRun)) / 60_000)}m remaining)`);
+  if (!nextAfterLast || nextAfterLast > now) {
+    const next = cron.nextRun();
+    console.log(`${job.id}: not due (next: ${next?.toLocaleString() ?? "never"})`);
     continue;
   }
 
@@ -97,7 +91,6 @@ for (const job of jobs) {
       const extracted = await extractMemories();
       console.log(`${job.id}: extracted ${extracted} memories`);
     } else if (job.prompt) {
-      const now = new Date();
       const timeStr = now.toLocaleString("en-US", {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         weekday: "long",
@@ -124,7 +117,7 @@ for (const job of jobs) {
     console.error(`${job.id} error:`, error);
   }
 
-  state[job.id] = now;
+  state[job.id] = Date.now();
 }
 
 await saveState(state);
