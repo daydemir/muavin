@@ -7,7 +7,9 @@
     <string>ai.muavin.cron</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__MUAVIN_BIN__/muavin-cron</string>
+        <string>__BUN__</string>
+        <string>run</string>
+        <string>__REPO_ROOT__/src/cron.ts</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__HOME__/.muavin</string>

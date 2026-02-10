@@ -661,13 +661,17 @@ async function configCommand() {
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i];
       let value: string;
-      if (f.source === "config") {
+      if (f.key === "startOnLogin") {
+        const raw = config?.[f.key];
+        value = (raw !== undefined ? raw !== false : true) ? "on" : "off";
+      } else if (f.source === "config") {
         value = config?.[f.key]?.toString() ?? "";
       } else {
         value = env[f.key] ?? "";
       }
       const isBool = typeof config?.[f.key] === "boolean";
-      const display = value ? (isBool ? value : maskValue(value)) : pc.dim("(not set)");
+      const isNum = typeof config?.[f.key] === "number";
+      const display = value ? (isBool || isNum ? value : maskValue(value)) : pc.dim("(not set)");
       console.log(`  ${i + 1}. ${f.label.padEnd(22)} ${display}`);
     }
 
@@ -785,7 +789,7 @@ async function stopCommand() {
 }
 
 async function deployCommand() {
-  heading("Building and deploying...\n");
+  heading("Deploying...\n");
 
   const homeDir = process.env.HOME!;
 
@@ -802,59 +806,13 @@ async function deployCommand() {
   const config = await parseConfigFile(`${homeDir}/.muavin/config.json`) ?? {};
 
   const repoRoot = resolve(import.meta.dir, "..");
-  const distDir = `${repoRoot}/dist`;
-  const muavinBinDir = `${homeDir}/.muavin/bin`;
-
-  // Build compiled binaries
-  heading("Building binaries...");
-  await mkdir(distDir, { recursive: true });
-
-  const binaries = [
-    { src: "src/relay.ts", out: "muavin-relay", id: "ai.muavin.relay" },
-    { src: "src/cron.ts", out: "muavin-cron", id: "ai.muavin.cron" },
-    { src: "src/heartbeat.ts", out: "muavin-heartbeat", id: "ai.muavin.heartbeat" },
-  ];
-
-  for (const bin of binaries) {
-    const buildProc = Bun.spawn([
-      "bun", "build", "--compile", `${repoRoot}/${bin.src}`, "--outfile", `${distDir}/${bin.out}`,
-    ], { stdout: "pipe", stderr: "pipe" });
-    await buildProc.exited;
-
-    if (buildProc.exitCode !== 0) {
-      const stderr = await new Response(buildProc.stderr).text();
-      fail(`Build failed for ${bin.out}: ${stderr}`);
-      return;
-    }
-    ok(`Built ${bin.out}`);
-
-    const signProc = Bun.spawn([
-      "codesign", "--force", "--sign", "-", "--identifier", bin.id, `${distDir}/${bin.out}`,
-    ], { stdout: "pipe", stderr: "pipe" });
-    await signProc.exited;
-
-    if (signProc.exitCode !== 0) {
-      const stderr = await new Response(signProc.stderr).text();
-      fail(`Codesign failed for ${bin.out}: ${stderr}`);
-      return;
-    }
-    ok(`Signed ${bin.out} (${bin.id})`);
-  }
-
-  // Copy to ~/.muavin/bin/
-  console.log();
-  heading("Installing binaries...");
-  await mkdir(muavinBinDir, { recursive: true });
-
-  for (const bin of binaries) {
-    const cpProc = Bun.spawn(["cp", `${distDir}/${bin.out}`, `${muavinBinDir}/${bin.out}`]);
-    await cpProc.exited;
-    await Bun.spawn(["chmod", "+x", `${muavinBinDir}/${bin.out}`]).exited;
-    ok(`Installed ${bin.out}`);
+  const bunPath = Bun.which("bun");
+  if (!bunPath) {
+    fail("bun not found in PATH");
+    return;
   }
 
   // Deploy launch daemons
-  console.log();
   heading("Deploying launch daemons...");
 
   const uidProc = Bun.spawn(["id", "-u"]);
@@ -875,14 +833,18 @@ async function deployCommand() {
     let plistContent = await Bun.file(sourcePath).text();
     const startOnLogin = config.startOnLogin !== false;
     plistContent = plistContent
-      .replace(/__MUAVIN_BIN__/g, muavinBinDir)
+      .replace(/__BUN__/g, bunPath)
+      .replace(/__REPO_ROOT__/g, repoRoot)
       .replace(/__HOME__/g, homeDir)
       .replace(/__RUN_AT_LOAD__/g, startOnLogin ? "<true/>" : "<false/>");
 
     await Bun.write(destPath, plistContent);
     ok(`Copied ${file}`);
 
-    await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`]).exited;
+    await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    }).exited;
 
     const bootstrapProc = Bun.spawn([
       "launchctl", "bootstrap", `gui/${uid}`, destPath,
