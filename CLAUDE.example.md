@@ -52,7 +52,7 @@ Muavin runs as 3 macOS launchd daemons (plist templates in `daemon/`):
 
 To inspect your own source code:
 1. Read `~/Library/LaunchAgents/ai.muavin.relay.plist` to find the repo path
-2. Key files: `src/relay.ts` (bot), `src/cron.ts` (scheduler), `src/heartbeat.ts` (monitoring), `src/claude.ts` (CLI spawner), `src/memory.ts` (Supabase + vector search), `src/cli.ts` (setup/deploy)
+2. Key files: `src/relay.ts` (bot), `src/cron.ts` (scheduler), `src/heartbeat.ts` (monitoring), `src/claude.ts` (CLI spawner), `src/memory.ts` (Supabase + vector search), `src/agents.ts` (background agents), `src/agent-runner.ts` (agent executor), `src/cli.ts` (setup/deploy)
 3. Config: `~/.muavin/config.json`, env: `~/.muavin/.env`, CLAUDE.md: `~/.muavin/CLAUDE.md`
 
 Common self-service operations:
@@ -60,6 +60,42 @@ Common self-service operations:
 - **Change model**: Edit `model` in `~/.muavin/config.json` (takes effect on next Claude spawn)
 - **Check status**: `launchctl list | grep muavin` or read state files
 - **View logs**: `~/Library/Logs/muavin-*.log` and `muavin-*.error.log`
+
+## Background Agents
+
+For tasks that take >2 minutes (deep research, multi-step analysis, complex work), use background agents instead of blocking the conversation.
+
+### When to use
+- Research tasks requiring web search + analysis
+- Multi-step investigations
+- Any task you estimate will take >2 minutes of Claude time
+- User explicitly asks for something to run in the background
+
+### How to create an agent
+1. Extract the `ChatId` from the prompt header (it's injected automatically by relay)
+2. Write a JSON file to `~/.muavin/agents/` with this schema:
+```json
+{
+  "id": "a_<timestamp>",
+  "status": "pending",
+  "task": "Short description of the task",
+  "prompt": "Full detailed prompt for the work Claude to execute",
+  "chatId": <numeric chat ID from prompt>,
+  "createdAt": "<ISO timestamp>"
+}
+```
+3. Save as `~/.muavin/agents/a_<timestamp>.json`
+4. After creating the file, start the runner if not already active:
+```bash
+# Find repo path from relay plist, then start runner
+REPO_ROOT=$(defaults read ~/Library/LaunchAgents/ai.muavin.relay.plist ProgramArguments | grep -oE '/[^"]+/src/relay.ts' | sed 's|/src/relay.ts||')
+test -f ~/.muavin/agent-runner.lock && kill -0 $(cat ~/.muavin/agent-runner.lock) 2>/dev/null || nohup bun run "$REPO_ROOT/src/agent-runner.ts" --loop > ~/Library/Logs/muavin-agents.log 2>&1 &
+```
+5. Respond to the user that the task is being handled in the background
+
+### Checking on agents
+- Read files from `~/.muavin/agents/` to see status of all agents
+- Active agent summaries are automatically injected into your context by relay
 
 ## Config
 - `model` in `~/.muavin/config.json` controls which Claude model Muavin uses (valid: "sonnet", "opus", "haiku"). Change it when asked.
@@ -71,9 +107,11 @@ Common self-service operations:
 - `~/Library/Logs/muavin-relay.log` / `.error.log`
 - `~/Library/Logs/muavin-cron.log` / `.error.log`
 - `~/Library/Logs/muavin-heartbeat.log` / `.error.log`
+- `~/Library/Logs/muavin-agents.log` — background agent runner output
 
 **State files:**
 - `~/.muavin/sessions.json` — active chat sessions
+- `~/.muavin/agents/` — background agent files (JSON)
 - `~/.muavin/relay.lock` — relay PID lock
 - `~/.muavin/cron-state.json` — last-run timestamps
 - `~/.muavin/heartbeat-state.json` — heartbeat state

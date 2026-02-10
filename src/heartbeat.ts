@@ -7,6 +7,7 @@ import { Bot } from "grammy";
 import { readFile, writeFile, stat, mkdir } from "fs/promises";
 import { join } from "path";
 import { sendTelegram, checkPendingAlerts } from "./telegram";
+import { listAgents } from "./agents";
 
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
@@ -143,6 +144,22 @@ async function checkErrorLogs(lastRun: number): Promise<string | null> {
   return null;
 }
 
+async function checkStuckAgents(): Promise<string | null> {
+  try {
+    const running = await listAgents({ status: "running" });
+    const stuck = running.filter(a => {
+      if (!a.startedAt) return false;
+      return Date.now() - new Date(a.startedAt).getTime() > 2 * 60 * 60_000; // 2h
+    });
+    if (stuck.length > 0) {
+      return `${stuck.length} stuck agent(s): ${stuck.map(a => a.task).join(", ")}`;
+    }
+    return null;
+  } catch {
+    return null; // agents dir may not exist yet
+  }
+}
+
 async function main() {
   const state = await loadState();
 
@@ -155,6 +172,7 @@ async function main() {
     checkTelegram(),
     checkErrorLogs(state.lastRun),
     checkPendingAlerts(),
+    checkStuckAgents(),
   ]);
 
   const failures: string[] = [];

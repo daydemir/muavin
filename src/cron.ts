@@ -5,6 +5,7 @@ import { join } from "path";
 import { callClaude } from "./claude";
 import { syncMemoryMd, runHealthCheck, extractMemories } from "./memory";
 import { sendTelegram } from "./telegram";
+import { cleanupAgents } from "./agents";
 
 validateEnv();
 
@@ -74,6 +75,9 @@ for (const job of jobs) {
     } else if (job.action === "extract-memories") {
       const extracted = await extractMemories();
       console.log(`${job.id}: extracted ${extracted} memories`);
+    } else if (job.action === "cleanup-agents") {
+      const cleaned = await cleanupAgents(7 * 24 * 60 * 60_000); // 7 days
+      console.log(`${job.id}: cleaned ${cleaned} old agent files`);
     } else if (job.prompt) {
       const timeStr = now.toLocaleString("en-US", {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,

@@ -4,6 +4,7 @@ import { writeFile, readFile, unlink, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { logMessage, searchContext } from "./memory";
+import { getAgentSummary } from "./agents";
 
 validateEnv();
 
@@ -221,6 +222,11 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
         console.log(`${timestamp()} Using appendSystemPrompt with ${contextStr.length} chars`);
       }
 
+      const agentSummary = await getAgentSummary();
+      if (agentSummary) {
+        appendSystemPrompt = (appendSystemPrompt ? appendSystemPrompt + "\n\n" : "") + agentSummary;
+      }
+
       // Build prompt with time context
       const now = new Date();
       const timeStr = now.toLocaleString("en-US", {
@@ -235,11 +241,13 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
 
       const chatType = ctx.chat?.type ?? "private";
       const senderName = ctx.from?.first_name ?? "User";
+      const numericChatId = ctx.chat?.id ?? 0;
       let fullPrompt = `Current time: ${timeStr}\nChannel: ${chatType}`;
       if (chatType !== "private") {
         fullPrompt += `\nSender: ${senderName}\nNote: Address ${senderName} by name. Be concise in group chats.`;
       }
       fullPrompt += `\n\n${prompt}`;
+      fullPrompt += `\nChatId: ${numericChatId}`;
 
       console.log(`${timestamp()} Full prompt built (${fullPrompt.length} chars): ${fullPrompt.slice(0, 300)}${fullPrompt.length > 300 ? '...' : ''}`);
 

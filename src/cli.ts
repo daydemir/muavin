@@ -672,6 +672,8 @@ const configSections: ConfigSection[] = [
     fields: [
       { key: "claudeModel", label: "Claude model", source: "config", type: "select", options: ["sonnet", "opus", "haiku"] },
       { key: "claudeTimeoutMs", label: "Claude timeout (ms)", source: "config", type: "number" },
+      { key: "agentMaxTurns", label: "Agent max turns", source: "config", type: "number" },
+      { key: "agentTimeoutMs", label: "Agent timeout (ms)", source: "config", type: "number" },
       { key: "startOnLogin", label: "Start on login", source: "config", type: "boolean" },
     ],
   },
@@ -861,20 +863,20 @@ async function editField(
       currentConfig.owner = uid;
       if (!Array.isArray(currentConfig.allowUsers)) currentConfig.allowUsers = [];
       if (!currentConfig.allowUsers.includes(uid)) currentConfig.allowUsers.push(uid);
-    } else if (field.key === "claudeTimeoutMs") {
-      const ms = Number(newValue);
-      if (isNaN(ms) || ms <= 0) {
+    } else if (field.key === "claudeTimeoutMs" || field.key === "agentMaxTurns" || field.key === "agentTimeoutMs") {
+      const num = Number(newValue);
+      if (isNaN(num) || num <= 0) {
         fail("Must be a positive number");
         await new Promise(resolve => setTimeout(resolve, 1000));
         return;
       }
-      currentConfig.claudeTimeoutMs = ms;
+      currentConfig[field.key] = num;
     } else {
       currentConfig[field.key] = newValue;
     }
     await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
     config[field.key] = field.key === "owner" ? Number(newValue) :
-                        field.key === "claudeTimeoutMs" ? Number(newValue) : newValue;
+                        (field.key === "claudeTimeoutMs" || field.key === "agentMaxTurns" || field.key === "agentTimeoutMs") ? Number(newValue) : newValue;
   } else {
     await updateEnvFile({ [field.key]: newValue });
     env[field.key] = newValue;
