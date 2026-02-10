@@ -1,207 +1,103 @@
-# Claw
+```
+                    _
+  _ __ ___  _   _  __ _ __   _(_)_ __
+ | '_ ` _ \| | | |/ _` \ \ / / | '_ \
+ | | | | | | |_| | (_| |\ V /| | | | |
+ |_| |_| |_|\__,_|\__,_| \_/ |_|_| |_|
+```
 
-Personal AI agent powered by OpenClaw.
+A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram.
 
-## Architecture
+## Features
 
-Six agents with two security boundaries:
+- **Claude Code brain** — spawns the Claude CLI for every request, with full tool access (filesystem, shell, web search, MCP servers)
+- **Persistent memory** — Supabase pgvector stores conversations and auto-extracted facts; relevant context is injected into every conversation
+- **Telegram interface** — text, photos, documents, group mentions; chunked responses with Markdown
+- **Cron system** — configurable scheduled jobs (custom prompts or built-in actions) via `config.json`
+- **Health monitoring** — heartbeat daemon checks relay, cron, Supabase, OpenAI, Telegram; alerts via Telegram with 2h dedup
 
-**Untrusted Intake** (no action tools, structured JSON only):
-
-| Agent | Model | Role |
-|-------|-------|------|
-| **Reader** | Opus 4.6 (cloud) | Email/messages → structured JSON |
-| **Researcher** | Gemini 2.5 Pro (cloud) | Web/papers → structured JSON |
-| **Social** | Grok 3 (cloud) | Social/tweets → structured JSON |
-
-**Orchestrator** (no execution tools):
-
-| Agent | Model | Role |
-|-------|-------|------|
-| **Conductor** | Opus 4.6 (cloud) | Routes, decides, spawns agents. No runtime access. |
-
-**Trusted Execution** (action tools, local Ollama):
-
-| Agent | Model | Role |
-|-------|-------|------|
-| **Tortoise** | Qwen3 32B Q4 (local) | Apple integrations, files, heavy reasoning, heartbeats |
-
-**Trusted Execution** (cloud, code only):
-
-| Agent | Model | Role |
-|-------|-------|------|
-| **Coder** | GPT 5.3 Codex (cloud) | Bash, filesystem, ralph loops |
-
-**Future:**
-
-| Agent | Model | Role |
-|-------|-------|------|
-| **Sender** | TBD | Outbound comms (email, social). See [docs/SENDER_FUTURE.md](docs/SENDER_FUTURE.md). |
-
-**Est. cost:** ~$150-200/mo (Opus ~$100-150 + Codex $20 + Gemini ~$10-20 + Grok ~$5-10 + local free)
-
-## MacBook Pro Setup (M1 Max 64GB, headless 24/7)
-
-### 1. Physical setup
-
-- Ethernet adapter connected
-- HDMI dummy plug inserted
-- Place in closet/shelf, keep ventilated
-
-### 2. macOS configuration
+## Quick Start
 
 ```bash
-# Prevent sleep (plugged in)
-sudo pmset -c sleep 0 -c disksleep 0 -c displaysleep 10
-
-# Enable SSH
-sudo systemsetup -setremotelogin on
-
-# Verify
-pmset -g
+curl -fsSL https://raw.githubusercontent.com/thisisdeniz/muavin/main/install.sh | bash
+muavin setup
 ```
 
-### 3. Install dependencies
+## Prerequisites
+
+- macOS (Apple Silicon or Intel)
+- [Bun](https://bun.sh) runtime
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm install -g @anthropic-ai/claude-code`)
+- Telegram bot token (from [@BotFather](https://t.me/BotFather))
+- [Supabase](https://supabase.com) project (free tier works)
+- [OpenAI API key](https://platform.openai.com/api-keys) (for embeddings)
+
+## Manual Installation
 
 ```bash
-# Homebrew
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Tailscale (remote access)
-brew install tailscale
-# Open Tailscale app and sign in
-
-# Node.js
-brew install node@22
-
-# Ollama (local models)
-brew install ollama
-
-# OpenClaw
-curl -fsSL https://openclaw.ai/install.sh | bash
-
-# Apple CLI tools (for Tortoise agent)
-brew install steipete/tap/remindctl
-brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
+git clone https://github.com/thisisdeniz/muavin.git ~/.muavin/src
+cd ~/.muavin/src
+bun install
+bun muavin setup
 ```
 
-Grant macOS permissions:
-- System Settings → Privacy & Security → Reminders → Enable Terminal
-- System Settings → Privacy & Security → Full Disk Access → Enable Terminal
-
-### 4. Pull local models
+## Usage
 
 ```bash
-# Start Ollama service
-brew services start ollama
-
-# Pull Qwen3 32B Q4 (20GB download, heavy reasoning — Tortoise)
-ollama pull qwen3:32b
-
-# Verify
-ollama list
-curl http://localhost:11434/api/tags
+bun muavin setup     # Interactive setup wizard
+bun muavin start     # Deploy launchd daemons
+bun muavin stop      # Stop all daemons
+bun muavin status    # Check daemon and session status
+bun muavin config    # Edit configuration (TUI)
+bun muavin test      # Run smoke tests
 ```
 
-### 5. Network-isolate Ollama
+## How It Works
 
-Block Ollama from making any outbound internet connections. It only needs localhost to serve models.
+Muavin runs as three macOS launchd daemons:
 
-```bash
-# Install Lulu (free open-source macOS firewall)
-brew install --cask lulu
+- **Relay** — Grammy Telegram bot (KeepAlive). Receives messages, vector-searches Supabase for context, spawns `claude` CLI, returns response.
+- **Cron** — Runs every 15 minutes. Executes scheduled jobs from `config.json`: memory extraction (every 2h), MEMORY.md sync (every 6h), health audit (daily), and custom prompts.
+- **Heartbeat** — Runs every 30 minutes. Checks relay, cron, Supabase, OpenAI, Telegram. Sends alerts with 2h dedup.
 
-# When Ollama makes its first outbound connection attempt, Lulu will prompt — deny it.
-# Verify Ollama still works locally:
-curl http://localhost:11434/api/tags
-```
+**Memory**: Conversations are stored in Supabase with OpenAI embeddings. A cron job extracts facts every 2h and deduplicates against existing memories. MEMORY.md syncs bidirectionally with the vector DB every 6h.
 
-See [docs/PROMPT_INJECTION_DEFENSE.md](docs/PROMPT_INJECTION_DEFENSE.md) (Layer 0) for details.
+## Configuration
 
-### 6. Set up .env
+`~/.muavin/config.json`:
 
-Clone this repo, then copy the `.env` file from your dev machine:
+| Key | Description | Default |
+|-----|-------------|---------|
+| `owner` | Your Telegram user ID | — |
+| `allowUsers` | Allowed Telegram user IDs | `[]` |
+| `allowGroups` | Allowed Telegram group IDs | `[]` |
+| `model` | Claude model (`sonnet`, `opus`, `haiku`) | `sonnet` |
+| `claudeTimeoutMs` | Max time per Claude call (ms) | `43200000` (12h) |
+| `startOnLogin` | Auto-start daemons on macOS login | `true` |
+| `cron` | Array of scheduled jobs | (see `config.example.json`) |
 
-```bash
-git clone <this-repo> ~/claw
-# Copy .env from dev machine (AirDrop, scp, or manually create)
-# scp devmachine:~/path/to/claw/.env ~/claw/.env
-```
+`~/.muavin/.env`:
 
-Or create `~/.openclaw/.env` manually with:
+| Key | Required | Description |
+|-----|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Yes | From @BotFather |
+| `SUPABASE_URL` | Yes | Project URL |
+| `SUPABASE_SERVICE_KEY` | Yes | Service role key |
+| `OPENAI_API_KEY` | Yes | For embeddings |
+| `ANTHROPIC_API_KEY` | No | For Claude Code CLI (if not already set) |
+| `XAI_API_KEY` | No | Grok access |
+| `GEMINI_API_KEY` | No | Gemini access |
+| `OPENROUTER_API_KEY` | No | OpenRouter access |
+| `BRAVE_API_KEY` | No | Brave Search |
 
-```
-ANTHROPIC_API_KEY=<your key>
-OPENAI_API_KEY=<your key>
-GEMINI_API_KEY=<your key>
-OPENROUTER_API_KEY=<your key>
-XAI_API_KEY=<your key>
-BRAVE_API_KEY=<your key>
-GATEWAY_TOKEN=<your key>
-```
+## Credits & Inspiration
 
-### 7. Deploy OpenClaw config
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) by Anthropic
+- [Grammy](https://grammy.dev) — Telegram bot framework
+- [Supabase](https://supabase.com) — pgvector for memory
+- [Croner](https://github.com/hexagon/croner) — cron scheduling
+- Inspired by [All-Hands-AI/OpenHands](https://github.com/All-Hands-AI/OpenHands) and [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers)
 
-```bash
-# Create OpenClaw directory
-mkdir -p ~/.openclaw
-chmod 700 ~/.openclaw
+## License
 
-# Copy config
-cp ~/claw/configs/openclaw.json ~/.openclaw/openclaw.json
-
-# Copy env (if not already there)
-cp ~/claw/.env ~/.openclaw/.env
-chmod 600 ~/.openclaw/.env
-```
-
-### 8. Onboard and start
-
-```bash
-# Run onboard wizard (sets up auth, gateway, channels)
-openclaw onboard --install-daemon
-
-# Set gateway to local mode
-openclaw config set gateway.mode local
-
-# Security audit
-openclaw security audit --deep --fix
-```
-
-### 9. Verify
-
-```bash
-# Ollama running with model loaded
-ollama list
-
-# OpenClaw gateway running
-openclaw gateway status
-
-# Tailscale connected
-tailscale status
-
-# Dashboard (optional, for debugging)
-openclaw dashboard
-```
-
-### 10. Install Codex CLI (Coder agent)
-
-Requires ChatGPT Plus subscription ($20/mo).
-
-```bash
-npm install -g @openai/codex
-```
-
-Set `CODEX_API_KEY` in your environment or authenticate via the CLI.
-
-## Hetzner VPS Deployment (legacy)
-
-See `scripts/deploy.sh` and `terraform/` for cloud VPS deployment. This is the older setup for the cax11 ARM server.
-
-```bash
-# Deploy a new instance
-./scripts/deploy.sh <name>
-
-# Sync config to running instance
-./scripts/sync-config.sh <name>
-```
+MIT

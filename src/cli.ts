@@ -631,6 +631,256 @@ function maskValue(value: string): string {
   return value.slice(0, 4) + "..." + value.slice(-3);
 }
 
+type FieldType = "secret" | "number" | "boolean" | "select";
+
+interface ConfigField {
+  key: string;
+  label: string;
+  source: "env" | "config";
+  type: FieldType;
+  options?: string[];
+}
+
+interface ConfigSection {
+  title: string;
+  fields: ConfigField[];
+}
+
+const configSections: ConfigSection[] = [
+  {
+    title: "Services",
+    fields: [
+      { key: "TELEGRAM_BOT_TOKEN", label: "Telegram bot token", source: "env", type: "secret" },
+      { key: "owner", label: "Telegram user ID", source: "config", type: "number" },
+      { key: "SUPABASE_URL", label: "Supabase URL", source: "env", type: "secret" },
+      { key: "SUPABASE_SERVICE_KEY", label: "Supabase service key", source: "env", type: "secret" },
+    ],
+  },
+  {
+    title: "API Keys",
+    fields: [
+      { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", source: "env", type: "secret" },
+      { key: "OPENAI_API_KEY", label: "OpenAI API key", source: "env", type: "secret" },
+      { key: "XAI_API_KEY", label: "Grok (xAI) API key", source: "env", type: "secret" },
+      { key: "GEMINI_API_KEY", label: "Gemini API key", source: "env", type: "secret" },
+      { key: "OPENROUTER_API_KEY", label: "OpenRouter API key", source: "env", type: "secret" },
+      { key: "BRAVE_API_KEY", label: "Brave Search API key", source: "env", type: "secret" },
+    ],
+  },
+  {
+    title: "Behavior",
+    fields: [
+      { key: "claudeModel", label: "Claude model", source: "config", type: "select", options: ["sonnet", "opus", "haiku"] },
+      { key: "claudeTimeoutMs", label: "Claude timeout (ms)", source: "config", type: "number" },
+      { key: "startOnLogin", label: "Start on login", source: "config", type: "boolean" },
+    ],
+  },
+];
+
+function readKey(): Promise<string> {
+  return new Promise((resolve) => {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    const onData = (data: string) => {
+      process.stdin.removeListener("data", onData);
+      process.stdin.pause();
+      if (data === "\x1b[A") resolve("up");
+      else if (data === "\x1b[B") resolve("down");
+      else if (data === "\r") resolve("enter");
+      else if (data === "\x1b" || data === "q") resolve("escape");
+      else if (data === "\x03") resolve("ctrl-c");
+      else resolve(data);
+    };
+    process.stdin.on("data", onData);
+  });
+}
+
+function getDisplayValue(field: ConfigField, env: Record<string, string>, config: any): string {
+  if (field.type === "boolean") {
+    const value = config?.[field.key];
+    if (field.key === "startOnLogin") {
+      return (value !== undefined ? value !== false : true) ? "on" : "off";
+    }
+    return value ? "on" : "off";
+  }
+
+  if (field.type === "select") {
+    const value = config?.[field.key];
+    if (field.key === "claudeModel") {
+      return value ?? "sonnet";
+    }
+    return value ?? (field.options?.[0] ?? pc.dim("(not set)"));
+  }
+
+  if (field.source === "config") {
+    const value = config?.[field.key];
+    return value !== undefined ? value.toString() : pc.dim("(not set)");
+  }
+
+  const value = env[field.key];
+  if (!value) return pc.dim("(not set)");
+  return maskValue(value);
+}
+
+function renderMenu(env: Record<string, string>, config: any, cursor: number) {
+  process.stdout.write("\x1b[2J\x1b[H");
+  console.log(pc.bold("Muavin Configuration"));
+  console.log();
+
+  let fieldIndex = 0;
+  for (const section of configSections) {
+    console.log(pc.bold(section.title));
+    for (const field of section.fields) {
+      const prefix = fieldIndex === cursor ? ">" : " ";
+      const displayValue = getDisplayValue(field, env, config);
+      const line = `${prefix} ${field.label.padEnd(26)} ${displayValue}`;
+      if (fieldIndex === cursor) {
+        console.log(pc.cyan(line));
+      } else {
+        console.log(line);
+      }
+      fieldIndex++;
+    }
+    console.log();
+  }
+
+  console.log(pc.dim("  ↑↓ navigate  Enter edit  Esc exit"));
+}
+
+async function editField(
+  field: ConfigField,
+  env: Record<string, string>,
+  config: any,
+  envPath: string,
+  configPath: string
+) {
+  if (field.type === "boolean") {
+    const currentConfig = await parseConfigFile(configPath) ?? {};
+    const currentValue = currentConfig[field.key];
+    if (field.key === "startOnLogin") {
+      const newValue = !(currentValue !== undefined ? currentValue !== false : true);
+      currentConfig[field.key] = newValue;
+      config[field.key] = newValue;
+    } else {
+      const newValue = !currentValue;
+      currentConfig[field.key] = newValue;
+      config[field.key] = newValue;
+    }
+    await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
+    return;
+  }
+
+  if (field.type === "select" && field.options) {
+    const currentConfig = await parseConfigFile(configPath) ?? {};
+    const currentValue = currentConfig[field.key] ?? (field.key === "claudeModel" ? "sonnet" : field.options[0]);
+    const currentIndex = field.options.indexOf(currentValue);
+    const nextIndex = (currentIndex + 1) % field.options.length;
+    const newValue = field.options[nextIndex];
+    currentConfig[field.key] = newValue;
+    config[field.key] = newValue;
+    await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
+    return;
+  }
+
+  process.stdin.setRawMode(false);
+  process.stdin.pause();
+  process.stdout.write("\x1b[?25h");
+
+  const currentValue = field.source === "config"
+    ? (config?.[field.key]?.toString() ?? "")
+    : (env[field.key] ?? "");
+
+  if (currentValue) {
+    const displayCurrent = field.type === "secret" ? maskValue(currentValue) : currentValue;
+    console.log(`\nCurrent: ${displayCurrent}`);
+  }
+
+  const newValue = prompt("New value (Enter to cancel): ");
+  if (!newValue) return;
+
+  if (field.key === "TELEGRAM_BOT_TOKEN") {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${newValue}/getMe`);
+      const data = await response.json();
+      if (!data.ok) {
+        fail("Invalid bot token");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return;
+      }
+      ok(`Bot validated: @${data.result.username}`);
+    } catch {
+      fail("Failed to validate bot token");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return;
+    }
+  }
+
+  if (field.key === "SUPABASE_URL" || field.key === "SUPABASE_SERVICE_KEY") {
+    const url = field.key === "SUPABASE_URL" ? newValue : env.SUPABASE_URL;
+    const key = field.key === "SUPABASE_SERVICE_KEY" ? newValue : env.SUPABASE_SERVICE_KEY;
+    if (url && key) {
+      try {
+        const client = createClient(url, key);
+        const { error } = await client.from("messages").select("id").limit(1);
+        if (error) {
+          fail(`Supabase error: ${error.message}`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return;
+        }
+        ok("Supabase connection verified");
+      } catch {
+        fail("Failed to connect to Supabase");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return;
+      }
+    }
+  }
+
+  if (field.key === "OPENAI_API_KEY") {
+    try {
+      const openai = new OpenAI({ apiKey: newValue });
+      await openai.embeddings.create({ model: "text-embedding-3-small", input: "test" });
+      ok("OpenAI API verified");
+    } catch {
+      fail("Invalid OpenAI API key");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return;
+    }
+  }
+
+  if (field.source === "config") {
+    const currentConfig = await parseConfigFile(configPath) ?? {};
+    if (field.key === "owner") {
+      const uid = Number(newValue);
+      if (isNaN(uid)) {
+        fail("Must be numeric");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return;
+      }
+      currentConfig.owner = uid;
+      if (!Array.isArray(currentConfig.allowUsers)) currentConfig.allowUsers = [];
+      if (!currentConfig.allowUsers.includes(uid)) currentConfig.allowUsers.push(uid);
+    } else if (field.key === "claudeTimeoutMs") {
+      const ms = Number(newValue);
+      if (isNaN(ms) || ms <= 0) {
+        fail("Must be a positive number");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return;
+      }
+      currentConfig.claudeTimeoutMs = ms;
+    } else {
+      currentConfig[field.key] = newValue;
+    }
+    await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
+    config[field.key] = field.key === "owner" ? Number(newValue) :
+                        field.key === "claudeTimeoutMs" ? Number(newValue) : newValue;
+  } else {
+    await updateEnvFile({ [field.key]: newValue });
+    env[field.key] = newValue;
+  }
+}
+
 async function configCommand() {
   const homeDir = process.env.HOME!;
   const muavinDir = `${homeDir}/.muavin`;
@@ -638,115 +888,36 @@ async function configCommand() {
   const configPath = `${muavinDir}/config.json`;
 
   const env = await parseEnvFile(envPath);
-  const config = await parseConfigFile(configPath);
+  const config = await parseConfigFile(configPath) ?? {};
 
-  const fields = [
-    { key: "TELEGRAM_BOT_TOKEN", label: "Telegram bot token", source: "env" },
-    { key: "owner", label: "Telegram user ID", source: "config" },
-    { key: "SUPABASE_URL", label: "Supabase URL", source: "env" },
-    { key: "SUPABASE_SERVICE_KEY", label: "Supabase service key", source: "env" },
-    { key: "OPENAI_API_KEY", label: "OpenAI API key", source: "env" },
-    { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", source: "env" },
-    { key: "XAI_API_KEY", label: "Grok (xAI) API key", source: "env" },
-    { key: "GEMINI_API_KEY", label: "Gemini API key", source: "env" },
-    { key: "OPENROUTER_API_KEY", label: "OpenRouter API key", source: "env" },
-    { key: "BRAVE_API_KEY", label: "Brave Search API key", source: "env" },
-    { key: "claudeTimeoutMs", label: "Claude timeout (ms)", source: "config" },
-    { key: "startOnLogin", label: "Start on login", source: "config" },
-  ];
+  const fields: ConfigField[] = configSections.flatMap(s => s.fields);
+  let cursor = 0;
+
+  const restoreTerminal = () => {
+    process.stdout.write("\x1b[?25h");
+    process.stdin.setRawMode(false);
+    process.stdin.pause();
+  };
+
+  process.on("SIGINT", () => {
+    restoreTerminal();
+    process.exit(0);
+  });
 
   while (true) {
-    heading("\nMuavin Configuration\n");
+    renderMenu(env, config, cursor);
+    const key = await readKey();
 
-    for (let i = 0; i < fields.length; i++) {
-      const f = fields[i];
-      let value: string;
-      if (f.key === "startOnLogin") {
-        const raw = config?.[f.key];
-        value = (raw !== undefined ? raw !== false : true) ? "on" : "off";
-      } else if (f.source === "config") {
-        value = config?.[f.key]?.toString() ?? "";
-      } else {
-        value = env[f.key] ?? "";
-      }
-      const isBool = typeof config?.[f.key] === "boolean";
-      const isNum = typeof config?.[f.key] === "number";
-      const display = value ? (isBool || isNum ? value : maskValue(value)) : pc.dim("(not set)");
-      console.log(`  ${i + 1}. ${f.label.padEnd(22)} ${display}`);
+    if (key === "up") {
+      cursor = (cursor - 1 + fields.length) % fields.length;
+    } else if (key === "down") {
+      cursor = (cursor + 1) % fields.length;
+    } else if (key === "enter") {
+      await editField(fields[cursor], env, config, envPath, configPath);
+    } else if (key === "escape" || key === "ctrl-c") {
+      restoreTerminal();
+      return;
     }
-
-    console.log();
-    const choice = prompt("Enter number to edit (or Enter to exit): ");
-    if (!choice) break;
-
-    const idx = parseInt(choice, 10) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= fields.length) {
-      warn("Invalid choice");
-      continue;
-    }
-
-    const field = fields[idx];
-    const newValue = prompt(`Enter new ${field.label}: `);
-    if (!newValue) continue;
-
-    // Validate where applicable
-    if (field.key === "TELEGRAM_BOT_TOKEN") {
-      try {
-        const response = await fetch(`https://api.telegram.org/bot${newValue}/getMe`);
-        const data = await response.json();
-        if (!data.ok) { fail("Invalid bot token"); continue; }
-        ok(`Bot validated: @${data.result.username}`);
-      } catch { fail("Failed to validate bot token"); continue; }
-    }
-
-    if (field.key === "SUPABASE_URL" || field.key === "SUPABASE_SERVICE_KEY") {
-      const url = field.key === "SUPABASE_URL" ? newValue : env.SUPABASE_URL;
-      const key = field.key === "SUPABASE_SERVICE_KEY" ? newValue : env.SUPABASE_SERVICE_KEY;
-      if (url && key) {
-        try {
-          const client = createClient(url, key);
-          const { error } = await client.from("messages").select("id").limit(1);
-          if (error) { fail(`Supabase error: ${error.message}`); continue; }
-          ok("Supabase connection verified");
-        } catch { fail("Failed to connect to Supabase"); continue; }
-      }
-    }
-
-    if (field.key === "OPENAI_API_KEY") {
-      try {
-        const openai = new OpenAI({ apiKey: newValue });
-        await openai.embeddings.create({ model: "text-embedding-3-small", input: "test" });
-        ok("OpenAI API verified");
-      } catch { fail("Invalid OpenAI API key"); continue; }
-    }
-
-    // Save the value
-    if (field.source === "config") {
-      const currentConfig = await parseConfigFile(configPath) ?? {};
-      if (field.key === "owner") {
-        const uid = Number(newValue);
-        if (isNaN(uid)) { fail("Must be numeric"); continue; }
-        currentConfig.owner = uid;
-        if (!Array.isArray(currentConfig.allowUsers)) currentConfig.allowUsers = [];
-        if (!currentConfig.allowUsers.includes(uid)) currentConfig.allowUsers.push(uid);
-      } else if (field.key === "claudeTimeoutMs") {
-        const ms = Number(newValue);
-        if (isNaN(ms) || ms <= 0) { fail("Must be a positive number"); continue; }
-        currentConfig.claudeTimeoutMs = ms;
-      } else if (field.key === "startOnLogin") {
-        if (newValue !== "true" && newValue !== "false") { fail("Must be true or false"); continue; }
-        currentConfig.startOnLogin = newValue === "true";
-      } else {
-        currentConfig[field.key] = newValue;
-      }
-      await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
-      config[field.key] = newValue;
-    } else {
-      await updateEnvFile({ [field.key]: newValue });
-      env[field.key] = newValue;
-    }
-
-    ok(`${field.label} updated`);
   }
 }
 

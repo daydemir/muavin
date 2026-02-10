@@ -1,6 +1,0 @@
-# Shared secrets — copy to terraform.tfvars and fill in
-# These are the same across all instances
-
-hetzner_api_key   = ""
-ssh_public_key    = ""
-tailscale_authkey = ""

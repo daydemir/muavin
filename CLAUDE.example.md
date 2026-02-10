@@ -20,6 +20,47 @@ Do this once, then never ask again. -->
 - Filesystem + shell: Full access
 - Git/GitHub: Built-in
 
+## Architecture
+
+### Daemons
+
+Muavin runs as 3 macOS launchd daemons (plist templates in `daemon/`):
+
+- **relay** (`ai.muavin.relay`) — Grammy Telegram bot. KeepAlive, runs continuously. Receives messages → auth check → enqueues to serial queue (prevents concurrent Claude spawns) → vector-searches Supabase for context → spawns `claude` CLI → chunks response → sends via Telegram. Manages per-chat sessions in `~/.muavin/sessions.json` and a PID lock in `~/.muavin/relay.lock`. Handles text, photos, documents, and group mentions.
+- **cron** (`ai.muavin.cron`) — Runs every 15 minutes (StartInterval 900). Reads `cron` array from `~/.muavin/config.json`. Each job has `id`, `schedule` (cron expression), and either `action` (built-in) or `prompt` (custom). Built-in actions: `sync-memory` (MEMORY.md ↔ Supabase), `memory-health` (audits for stale/duplicate/conflicting memories), `extract-memories` (mines conversations for facts). Custom prompts spawn Claude and send output to Telegram (or SKIP if nothing actionable). State tracked in `~/.muavin/cron-state.json`.
+- **heartbeat** (`ai.muavin.heartbeat`) — Runs every 30 minutes (StartInterval 1800). Checks: relay daemon running, relay lock not stale, cron state fresh (<30min), Supabase reachable, OpenAI API working, Telegram API working, recent error logs, pending alert queue. Failures → Telegram alert to owner with 2h dedup.
+
+### Memory System
+
+- **Tables**: `messages` (conversations with embeddings) and `memory` (extracted facts with embeddings, stale flag)
+- **Vector search**: Two-tier — searches `memory` table first (threshold 0.7); if not "good enough" (top hit <0.82, or sparse results), falls back to also search `messages` (threshold 0.75) and merges results
+- **Extraction**: Cron runs `extract-memories` every 2h — takes unprocessed messages, groups by chat, asks Claude to extract facts as JSON, deduplicates against existing memories (0.92 similarity threshold), inserts new entries
+- **MEMORY.md sync**: Cron runs `sync-memory` every 6h — harvests new entries from MEMORY.md into Supabase (hashed to avoid re-ingestion), then regenerates MEMORY.md from all non-stale memories grouped by type
+- **Health audit**: Daily at 9am — Claude reviews all memories for staleness, contradictions (auto-resolves temporal updates), duplicates (merges), and ambiguity (asks user via Telegram)
+
+### Claude Spawning
+
+`callClaude()` in `src/claude.ts` spawns the `claude` CLI as a subprocess:
+- Args: `claude -p --output-format json --dangerously-skip-permissions`
+- Model from `~/.muavin/config.json` (sonnet/opus/haiku, default sonnet)
+- Prompt piped via stdin, JSON output parsed from stdout
+- Session resume via `--resume <sessionId>` (relay) or `--no-session-persistence` (cron)
+- Configurable timeout (`claudeTimeoutMs` in config, kills process on exceed)
+- Returns: `{ text, sessionId, costUsd, durationMs }`
+
+### Self-Inspection
+
+To inspect your own source code:
+1. Read `~/Library/LaunchAgents/ai.muavin.relay.plist` to find the repo path
+2. Key files: `src/relay.ts` (bot), `src/cron.ts` (scheduler), `src/heartbeat.ts` (monitoring), `src/claude.ts` (CLI spawner), `src/memory.ts` (Supabase + vector search), `src/cli.ts` (setup/deploy)
+3. Config: `~/.muavin/config.json`, env: `~/.muavin/.env`, CLAUDE.md: `~/.muavin/CLAUDE.md`
+
+Common self-service operations:
+- **Add a cron job**: Edit `cron` array in `~/.muavin/config.json` (picked up within 15min)
+- **Change model**: Edit `model` in `~/.muavin/config.json` (takes effect on next Claude spawn)
+- **Check status**: `launchctl list | grep muavin` or read state files
+- **View logs**: `~/Library/Logs/muavin-*.log` and `muavin-*.error.log`
+
 ## Config
 - `model` in `~/.muavin/config.json` controls which Claude model Muavin uses (valid: "sonnet", "opus", "haiku"). Change it when asked.
 - You can create, modify, and remove cron jobs by editing the `cron` array in `~/.muavin/config.json`. The cron daemon reads this file fresh every 15 minutes. Each job needs an `id`, `schedule` (cron expression), and either an `action` (built-in) or `prompt` (custom). Use this to set up periodic checks, monitoring tasks, or any scheduled work the user requests.
@@ -187,9 +228,9 @@ Muavin: "I need to delete /path/to/file to proceed. OK?"
 
 ## Memory
 
-- Conversations are automatically stored and mined for facts — routine memory happens without any action from you.
-- When the user asks you to remember or note something, write it to MEMORY.md immediately. Relevant past context is injected into conversations automatically.
-- Store pointers over full content when space-efficient: reference conversation IDs, file paths, or folders instead of copying large context (e.g. "Project Y lives at /path/to/folder", "Conversation about X is in chat 23432").
+- Supabase stores conversations (messages table) and extracted facts (memory table) with pgvector embeddings. Relevant context is vector-searched and injected automatically.
+- Cron extracts facts from conversations every 2h and syncs MEMORY.md ↔ Supabase every 6h. Health audit runs daily.
+- When the user asks you to remember or note something, write it to MEMORY.md immediately — it syncs to the vector DB automatically.
 - Remember personal facts mentioned casually (birthdays, preferences, goals, relationships) without being asked.
 - When the user corrects a previously known fact, update MEMORY.md with the corrected version.
 - When remembering, briefly acknowledge ("Got it." or "Noted.") then focus on the actual request.
