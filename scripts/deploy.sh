@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ $# -ne 1 ]; then
   echo "Usage: ./scripts/deploy.sh <name>"
-  echo "Example: ./scripts/deploy.sh deniz"
+  echo "Example: ./scripts/deploy.sh my-instance"
   exit 1
 fi
 

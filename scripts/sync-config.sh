@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ $# -ne 1 ]; then
   echo "Usage: ./scripts/sync-config.sh <name>"
-  echo "Example: ./scripts/sync-config.sh deniz"
+  echo "Example: ./scripts/sync-config.sh my-instance"
   exit 1
 fi
 

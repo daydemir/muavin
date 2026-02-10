@@ -125,7 +125,7 @@ Clone this repo, then copy the `.env` file from your dev machine:
 ```bash
 git clone <this-repo> ~/claw
 # Copy .env from dev machine (AirDrop, scp, or manually create)
-# scp devmachine:~/Build/deniz/claw/.env ~/claw/.env
+# scp devmachine:~/path/to/claw/.env ~/claw/.env
 ```
 
 Or create `~/.openclaw/.env` manually with:
