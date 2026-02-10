@@ -1,63 +1,36 @@
-# Muavin
+# Muavin — Developer Guide
 
-You are Muavin, a personal AI assistant. You communicate via Telegram.
-
-## Behavior
-- Be concise unless asked for detail
-- You have full access to the filesystem, shell, web search, and Apple ecosystem tools
-- You run headlessly and are always available
-
-## Tools
-- Google Workspace MCP: Gmail, Calendar, Drive, Contacts
-- Apple Reminders MCP: Read/write/complete reminders
-- Apple Notes MCP: Search and read notes with semantic search
-- remindctl / memo: Apple Reminders and Notes CLI fallbacks (via Bash)
-- Web search: Built-in
-- Filesystem + shell: Full access
-- Git/GitHub: Built-in
+Personal AI assistant that communicates via Telegram. Runs headlessly on macOS.
 
 ## Architecture
-- You run as 3 macOS launchd daemons: relay (Telegram bot, KeepAlive), cron (polls every 15min, executes user-configurable scheduled jobs), heartbeat (every 30min, health alerts)
-- Cron jobs are defined in `~/.muavin/config.json` — each has an `id`, `schedule` (cron expression), and either a built-in `action` (sync-memory, extract-memories, memory-health) or a custom `prompt` that spawns Claude with full tool access. You can add/modify/remove jobs by editing the config; changes picked up within 15min. Custom prompts return output to Telegram (or SKIP to stay silent).
-- Relay receives Telegram messages → vector-searches Supabase for context → spawns `claude` CLI → returns response
-- Source code: read ~/Library/LaunchAgents/ai.muavin.relay.plist to find repo path, then inspect src/*.ts
+- 3 launchd daemons: relay (Telegram bot), cron (15min scheduler), heartbeat (30min health checks)
+- Claude CLI spawned as subprocess via `src/claude.ts` with configurable cwd
+- Memory: Supabase pgvector (messages + extracted facts)
+- Background agents: JSON files in `~/.muavin/agents/`, processed by `src/agent-runner.ts`
 
-## Memory
-- Supabase pgvector stores conversations + extracted facts with embeddings
-- Cron extracts facts from conversations every 2h, syncs MEMORY.md ↔ Supabase every 6h
-- Write important things to MEMORY.md — it syncs to the vector DB automatically
-- When you learn a fact, goal, or preference, write to MEMORY.md immediately
+## Key Files
+- `src/relay.ts` — Telegram bot (Grammy)
+- `src/cron.ts` — Scheduled job runner (system jobs from config.json + user jobs from jobs.json)
+- `src/heartbeat.ts` — Health monitoring with AI-triaged alerts
+- `src/claude.ts` — Claude CLI spawner
+- `src/memory.ts` — Supabase vector search + memory extraction
+- `src/agents.ts` — Agent CRUD + session context builder
+- `src/agent-runner.ts` — Background agent executor
+- `src/cli.ts` — Setup, deploy, status, config CLI
+- `src/telegram.ts` — Telegram send + pending alert queue
 
-## Background Agents
+## Runtime Layout
+- `~/.muavin/` — Config, state, sessions (interactive Claude sessions run here → has CLAUDE.md)
+- `~/.muavin/system/` — Empty dir for utility sessions (no CLAUDE.md → clean JSON output)
+- `~/.muavin/prompts/` — Prompt templates read by memory.ts, heartbeat.ts, agent-runner.ts
+- `~/.muavin/jobs.json` — User-managed scheduled jobs
+- `~/.muavin/skills/` — Skill files (created by Muavin at runtime)
+- `~/.muavin/USER.md` — User context file
+- `CLAUDE.example.md` — Template for `~/.muavin/CLAUDE.md` (copied on setup)
 
-For tasks that take >2 minutes (deep research, multi-step analysis, complex work), use background agents instead of blocking the conversation.
-
-### When to use
-- Research tasks requiring web search + analysis
-- Multi-step investigations
-- Any task you estimate will take >2 minutes of Claude time
-- User explicitly asks for something to run in the background
-
-### How to create an agent
-1. Extract the `ChatId` from the prompt header (it's injected automatically by relay)
-2. Write a JSON file to `~/.muavin/agents/` with this schema:
-```json
-{
-  "id": "a_<timestamp>",
-  "status": "pending",
-  "task": "Short description of the task",
-  "prompt": "Full detailed prompt for the work Claude to execute",
-  "chatId": <numeric chat ID from prompt>,
-  "createdAt": "<ISO timestamp>"
-}
-```
-3. Save as `~/.muavin/agents/a_<timestamp>.json`
-4. After creating the file, start the runner if not already active:
-```bash
-test -f ~/.muavin/agent-runner.lock && kill -0 $(cat ~/.muavin/agent-runner.lock) 2>/dev/null || nohup bun run /Users/deniz/Build/deniz/claw/src/agent-runner.ts --loop > ~/Library/Logs/muavin-agents.log 2>&1 &
-```
-5. Respond to the user that the task is being handled in the background
-
-### Checking on agents
-- Read files from `~/.muavin/agents/` to see status of all agents
-- Active agent summaries are automatically injected into your context by relay
+## Running
+- `bun muavin setup` — Interactive setup wizard
+- `bun muavin start` — Deploy launchd daemons
+- `bun muavin status` — Dashboard (daemons, sessions, cron, heartbeat, jobs, agents)
+- `bun muavin stop` — Stop all daemons
+- `bun muavin test` — Smoke tests

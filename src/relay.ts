@@ -4,7 +4,7 @@ import { writeFile, readFile, unlink, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { logMessage, searchContext } from "./memory";
-import { getAgentSummary } from "./agents";
+import { buildSessionContext } from "./agents";
 
 validateEnv();
 
@@ -222,9 +222,9 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
         console.log(`${timestamp()} Using appendSystemPrompt with ${contextStr.length} chars`);
       }
 
-      const agentSummary = await getAgentSummary();
-      if (agentSummary) {
-        appendSystemPrompt = (appendSystemPrompt ? appendSystemPrompt + "\n\n" : "") + agentSummary;
+      const sessionContext = await buildSessionContext();
+      if (sessionContext) {
+        appendSystemPrompt = (appendSystemPrompt ? appendSystemPrompt + "\n\n" : "") + sessionContext;
       }
 
       // Build prompt with time context

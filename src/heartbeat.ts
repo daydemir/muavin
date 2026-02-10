@@ -5,9 +5,11 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { Bot } from "grammy";
 import { readFile, writeFile, stat, mkdir } from "fs/promises";
+import { readFileSync } from "fs";
 import { join } from "path";
 import { sendTelegram, checkPendingAlerts } from "./telegram";
 import { listAgents } from "./agents";
+import { callClaude } from "./claude";
 
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
@@ -131,7 +133,7 @@ async function checkErrorLogs(lastRun: number): Promise<string | null> {
         const last = lines.slice(-5);
         if (last.length > 0) {
           const name = logFile.split("/").pop();
-          recentErrors.push(`${name}: ${last.length} recent lines`);
+          recentErrors.push(`${name}:\n${last.join("\n")}`);
         }
       }
     } catch {
@@ -187,27 +189,49 @@ async function main() {
   if (failures.length === 0) {
     console.log("Heartbeat OK");
   } else {
-    const alertText = `⚠️ Muavin Heartbeat Alert\n\n${failures.map(f => `- ${f}`).join("\n")}`;
-
-    const isDuplicate = alertText === state.lastAlertText &&
-      (Date.now() - state.lastAlertAt) < 2 * 60 * 60_000;
-
-    if (!isDuplicate) {
-      const config = await loadConfig();
-      const sent = await sendTelegram(config.owner, alertText);
-      if (sent) {
-        state.lastAlertText = alertText;
-        state.lastAlertAt = Date.now();
-        console.log("Alert sent to Telegram");
-      } else {
-        console.error("Failed to send heartbeat alert (queued for retry)");
-      }
-    } else {
-      console.log("Alert suppressed (duplicate within 2h)");
-    }
-
     for (const f of failures) {
       console.error(`FAIL: ${f}`);
+    }
+
+    // AI triage — let Claude decide if this warrants an alert
+    const promptsDir = join(process.env.HOME ?? "~", ".muavin", "prompts");
+    const systemCwd = join(process.env.HOME ?? "~", ".muavin", "system");
+    const triagePrompt = readFileSync(join(promptsDir, "heartbeat-triage.md"), "utf-8")
+      .replace("{{HEALTH_RESULTS}}", failures.join("\n"));
+
+    try {
+      const result = await callClaude(triagePrompt, {
+        noSessionPersistence: true,
+        maxTurns: 1,
+        cwd: systemCwd,
+      });
+
+      if (result.text.trim() === "SKIP") {
+        console.log("AI triage: SKIP (not worth alerting)");
+      } else {
+        const isDuplicate = result.text === state.lastAlertText &&
+          (Date.now() - state.lastAlertAt) < 2 * 60 * 60_000;
+
+        if (!isDuplicate) {
+          const config = await loadConfig();
+          const sent = await sendTelegram(config.owner, result.text);
+          if (sent) {
+            state.lastAlertText = result.text;
+            state.lastAlertAt = Date.now();
+            console.log("AI-triaged alert sent to Telegram");
+          } else {
+            console.error("Failed to send heartbeat alert (queued for retry)");
+          }
+        } else {
+          console.log("Alert suppressed (duplicate within 2h)");
+        }
+      }
+    } catch (e) {
+      // Fallback to direct alert if Claude fails
+      console.error("AI triage failed, sending raw alert:", e);
+      const alertText = `Muavin Heartbeat Alert\n\n${failures.map(f => `- ${f}`).join("\n")}`;
+      const config = await loadConfig();
+      await sendTelegram(config.owner, alertText);
     }
   }
 

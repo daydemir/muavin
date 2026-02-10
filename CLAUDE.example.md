@@ -99,7 +99,83 @@ test -f ~/.muavin/agent-runner.lock && kill -0 $(cat ~/.muavin/agent-runner.lock
 
 ## Config
 - `model` in `~/.muavin/config.json` controls which Claude model Muavin uses (valid: "sonnet", "opus", "haiku"). Change it when asked.
-- You can create, modify, and remove cron jobs by editing the `cron` array in `~/.muavin/config.json`. The cron daemon reads this file fresh every 15 minutes. Each job needs an `id`, `schedule` (cron expression), and either an `action` (built-in) or `prompt` (custom). Use this to set up periodic checks, monitoring tasks, or any scheduled work the user requests.
+- System cron jobs live in `~/.muavin/config.json` under the `cron` array. These are infrastructure jobs (memory sync, health checks). Don't modify these unless asked.
+
+## Jobs
+
+User-managed scheduled jobs live in `~/.muavin/jobs.json`. Create, edit, pause, or delete jobs here when the user asks for scheduled tasks.
+
+### Schema
+```json
+[
+  {
+    "id": "j_<timestamp>",
+    "name": "short description",
+    "schedule": "cron expression",
+    "prompt": "Full prompt for Claude to execute. Must be self-contained. Include SKIP instruction.",
+    "enabled": true,
+    "createdAt": "ISO timestamp"
+  }
+]
+```
+
+### How to manage
+- **Create**: Append to the array. Use `id: "j_" + Date.now()`. Always include `"enabled": true`.
+- **Pause**: Set `"enabled": false`. The job stays in the file but won't run.
+- **Resume**: Set `"enabled": true`.
+- **Delete**: Remove the entry from the array.
+- **Edit**: Modify `schedule`, `prompt`, or `name` in place.
+
+### Cron expression reference
+- `0 9 * * *` — daily at 9am
+- `0 */2 * * *` — every 2 hours
+- `0 9 * * 1-5` — weekdays at 9am
+- `*/30 * * * *` — every 30 minutes
+- `0 9,18 * * *` — 9am and 6pm
+
+### Writing good job prompts
+- Make prompts self-contained (don't assume context from other jobs)
+- Always include: "If nothing notable, respond with exactly: SKIP"
+- Be specific about what to check, where to look, and what format to use
+- Jobs run with full tool access (web search, filesystem, APIs)
+
+## Skills
+
+Skills are stored as markdown files in `~/.muavin/skills/`. When the user says "learn how to..." or "remember how to...", create a skill file.
+
+### How to use
+- Before handling a request, check if `~/.muavin/skills/` has a relevant file
+- Skill files contain step-by-step instructions for a specific task
+- File naming: lowercase, hyphenated, descriptive. e.g., `search-flights.md`, `check-stock-price.md`
+
+### Creating a skill
+When the user asks you to learn something:
+1. Research the task (web search, test the approach)
+2. Write a markdown file to `~/.muavin/skills/` with clear, repeatable instructions
+3. Include any API endpoints, CLI commands, or specific steps
+4. Confirm: "Learned. I'll use this approach next time."
+
+### Using a skill
+When a request matches a known skill:
+1. Read the skill file
+2. Follow its instructions
+3. If the skill is outdated or broken, fix the file
+
+## Context Files
+
+### USER.md (`~/.muavin/USER.md`)
+Goals, preferences, work context, relationships. Read this for personalized context. Update it when the user shares relevant personal info (new job, project, preference, relationship).
+
+### MEMORY.md
+Write important facts here immediately when learned. It syncs to the vector DB automatically via cron. This is the fastest way to persist a fact.
+
+## Disambiguation
+
+- **Job**: Runs on a schedule, unattended. "Check X every Y and tell me Z." → `~/.muavin/jobs.json`
+- **Skill**: Stored procedure, invoked on demand. "When I say X, do Y." → `~/.muavin/skills/`
+- **Agent**: One-off long-running task. "Research X and get back to me." → `~/.muavin/agents/`
+
+When the user's intent is ambiguous, ask: "Should this be a recurring job, a skill I can reuse, or a one-time task?"
 
 ## Self-Diagnostics
 

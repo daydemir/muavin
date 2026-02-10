@@ -1,10 +1,24 @@
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { readFile, readdir, writeFile, mkdir } from "fs/promises";
+import { readFileSync } from "fs";
 import { join } from "path";
 import { createHash } from "crypto";
 import { callClaude } from "./claude";
 import { sendTelegram } from "./telegram";
+
+const SYSTEM_CWD = join(process.env.HOME ?? "~", ".muavin", "system");
+const PROMPTS_DIR = join(process.env.HOME ?? "~", ".muavin", "prompts");
+
+function extractJSON(text: string): string {
+  const match = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+  if (match) return match[1].trim();
+  const arr = text.match(/\[[\s\S]*\]/);
+  if (arr) return arr[0];
+  const obj = text.match(/\{[\s\S]*\}/);
+  if (obj) return obj[0];
+  return text.trim();
+}
 
 export const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -167,28 +181,29 @@ export async function extractMemories(): Promise<number> {
   let extracted = 0;
   const processedIds: number[] = [];
 
+  const promptTemplate = readFileSync(join(PROMPTS_DIR, "extract-memories.md"), "utf-8");
+
   try {
     for (const [chatId, msgs] of Object.entries(chunks)) {
       const conversation = msgs
         .map(m => `${m.role}: ${m.content}`)
         .join("\n");
 
-      const result = await callClaude(
-        `Extract personal facts, preferences, goals, relationships from this conversation.
-Only extract things worth remembering long-term.
-Output JSON: [{"type": "personal_fact|preference|goal|relationship|context", "content": "..."}]
-If nothing worth extracting, return [].
+      const prompt = promptTemplate.replace("{{CONVERSATION}}", conversation);
 
-Conversation:
-${conversation}`,
-        { noSessionPersistence: true },
-      );
+      const result = await callClaude(prompt, {
+        noSessionPersistence: true,
+        cwd: SYSTEM_CWD,
+      });
+
+      // Mark as processed immediately (even if parsing fails)
+      processedIds.push(...msgs.map(m => m.id));
 
       let facts: Array<{ type: string; content: string }>;
       try {
-        facts = JSON.parse(result.text);
+        facts = JSON.parse(extractJSON(result.text));
       } catch {
-        console.error("extractMemories: failed to parse Claude response for chat", chatId);
+        console.error("extractMemories: failed to parse Claude response for chat", chatId, "response:", result.text.slice(0, 200));
         continue;
       }
 
@@ -214,8 +229,6 @@ ${conversation}`,
           console.error("extractMemories: failed to process fact:", e);
         }
       }
-
-      processedIds.push(...msgs.map(m => m.id));
     }
   } finally {
     if (processedIds.length > 0) {
@@ -370,31 +383,19 @@ export async function runHealthCheck(): Promise<void> {
     .map((m) => `[${m.id}] (${m.type}) ${m.content}`)
     .join("\n");
 
-  const prompt = `Review these memories for a personal AI assistant. Find issues in these categories:
+  const promptTemplate = readFileSync(join(PROMPTS_DIR, "health-check.md"), "utf-8");
+  const prompt = promptTemplate.replace("{{MEMORIES}}", memoriesText);
 
-1. **Auto-resolvable**: Temporal updates where newer info is obviously correct (e.g. "graduating in May" → "graduated in May"). For these, identify the stale (older) entry and the one to keep.
-2. **Needs user input**: Genuine contradictions or ambiguity where you can't determine which is correct. Output a clear question.
-3. **Merge candidates**: Near-duplicates that should be consolidated into one entry.
-4. **Stale**: Outdated information that's no longer relevant.
-
-Memories:
-${memoriesText}
-
-Output JSON only:
-{
-  "resolved": [{"stale_id": id, "kept_id": id, "reason": "..."}],
-  "stale": [id1, id2],
-  "clarify": [{"id": id, "question": "question to ask user"}],
-  "merge": [{"ids": [id1, id2], "merged": "merged text"}]
-}`;
-
-  const result = await callClaude(prompt, { noSessionPersistence: true });
+  const result = await callClaude(prompt, {
+    noSessionPersistence: true,
+    cwd: SYSTEM_CWD,
+  });
   let healthResult: HealthCheckResult;
 
   try {
-    healthResult = JSON.parse(result.text);
+    healthResult = JSON.parse(extractJSON(result.text));
   } catch {
-    console.error("Failed to parse health check result");
+    console.error("Failed to parse health check result, response:", result.text.slice(0, 200));
     return;
   }
 

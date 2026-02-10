@@ -1,9 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { Bot } from "grammy";
+import { Cron } from "croner";
 import { resolve } from "path";
-import { mkdir } from "fs/promises";
+import { readFile, mkdir } from "fs/promises";
 import pc from "picocolors";
+import { listAgents } from "./agents";
 
 const ok = (msg: string) => console.log(pc.green(`✓ ${msg}`));
 const fail = (msg: string) => console.error(pc.red(`✗ ${msg}`));
@@ -1120,6 +1122,124 @@ async function statusCommand() {
   } catch {
     console.error(pc.dim("  Error reading heartbeat state"));
   }
+
+  // Check jobs
+  console.log();
+  heading("Jobs:");
+  try {
+    const configFile = Bun.file(`${process.env.HOME}/.muavin/config.json`);
+    const config = await configFile.json();
+    const systemJobs: Array<{ id: string; schedule: string; action?: string; prompt?: string }> = config.cron ?? [];
+
+    let userJobs: Array<{ id: string; name?: string; schedule: string; prompt: string; enabled?: boolean }> = [];
+    try {
+      const jobsFile = Bun.file(`${process.env.HOME}/.muavin/jobs.json`);
+      if (await jobsFile.exists()) {
+        userJobs = await jobsFile.json();
+      }
+    } catch {}
+
+    // Load cron state
+    let cronState: Record<string, number> = {};
+    try {
+      cronState = JSON.parse(await readFile(cronStatePath, "utf-8"));
+    } catch {}
+
+    const enabledUser = userJobs.filter(j => j.enabled !== false);
+    const disabledUser = userJobs.filter(j => j.enabled === false);
+    console.log(pc.dim(`  ${systemJobs.length} system, ${enabledUser.length} user${disabledUser.length > 0 ? ` (${disabledUser.length} disabled)` : ""}`));
+    console.log();
+
+    for (const job of systemJobs) {
+      const lastRun = cronState[job.id];
+      const lastStr = lastRun ? timeAgo(lastRun) : "never";
+      const cron = new Cron(job.schedule);
+      const nextRun = cron.nextRun();
+      const nextStr = nextRun ? timeUntil(nextRun.getTime()) : "—";
+      const label = job.action ?? "prompt";
+      console.log(pc.dim(`  ${pc.cyan("[sys]")} ${job.id.padEnd(20)} ${label.padEnd(18)} last: ${lastStr.padEnd(10)} next: ${nextStr}`));
+    }
+
+    for (const job of userJobs) {
+      const lastRun = cronState[job.id];
+      const lastStr = lastRun ? timeAgo(lastRun) : "never";
+      const enabledStr = job.enabled === false ? pc.yellow("[off]") : pc.green("[on] ");
+      let nextStr = "—";
+      if (job.enabled !== false) {
+        const cron = new Cron(job.schedule);
+        const nextRun = cron.nextRun();
+        nextStr = nextRun ? timeUntil(nextRun.getTime()) : "—";
+      }
+      const name = job.name || job.id;
+      console.log(pc.dim(`  ${enabledStr} ${name.padEnd(20)} ${job.schedule.padEnd(18)} last: ${lastStr.padEnd(10)} next: ${nextStr}`));
+    }
+  } catch {
+    dim("  Error reading jobs");
+  }
+
+  // Check agents
+  console.log();
+  heading("Agents:");
+  try {
+    const running = await listAgents({ status: "running" });
+    const completed = await listAgents({ status: "completed" });
+    const pending = await listAgents({ status: "pending" });
+    const failed = await listAgents({ status: "failed" });
+
+    if (running.length === 0 && completed.length === 0 && pending.length === 0 && failed.length === 0) {
+      dim("  No agents");
+    } else {
+      if (pending.length > 0) {
+        for (const a of pending) {
+          console.log(pc.dim(`  ${pc.yellow("pending")}   ${a.task} (created ${timeAgo(new Date(a.createdAt).getTime())})`));
+        }
+      }
+      if (running.length > 0) {
+        for (const a of running) {
+          const elapsed = a.startedAt ? timeAgo(new Date(a.startedAt).getTime()) : "?";
+          console.log(pc.dim(`  ${pc.cyan("running")}   ${a.task} (started ${elapsed})`));
+        }
+      }
+      const recentCompleted = completed.slice(-5);
+      if (recentCompleted.length > 0) {
+        for (const a of recentCompleted) {
+          const when = a.completedAt ? timeAgo(new Date(a.completedAt).getTime()) : "?";
+          console.log(pc.dim(`  ${pc.green("done")}      ${a.task} (${when})`));
+        }
+      }
+      const recentFailed = failed.slice(-3);
+      if (recentFailed.length > 0) {
+        for (const a of recentFailed) {
+          const when = a.completedAt ? timeAgo(new Date(a.completedAt).getTime()) : "?";
+          console.log(pc.dim(`  ${pc.red("failed")}    ${a.task} (${when})`));
+        }
+      }
+    }
+  } catch {
+    dim("  Error reading agents");
+  }
+}
+
+function timeAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function timeUntil(ts: number): string {
+  const diff = ts - Date.now();
+  if (diff < 0) return "overdue";
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `in ${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `in ${days}d`;
 }
 
 async function testCommand() {

@@ -34,6 +34,7 @@ export async function callClaude(prompt: string, opts?: {
   noSessionPersistence?: boolean;
   maxTurns?: number;
   timeoutMs?: number;
+  cwd?: string;
 }): Promise<ClaudeResult> {
   const startTime = Date.now();
   const timestamp = () => `[claude ${new Date().toISOString()}]`;
@@ -57,6 +58,7 @@ export async function callClaude(prompt: string, opts?: {
     stderr: "pipe",
     stdin: "pipe",
     env: { ...process.env },
+    cwd: opts?.cwd ?? join(homedir(), ".muavin"),
   });
 
   console.log(`${timestamp()} Process spawned, writing ${prompt.length} chars to stdin`);

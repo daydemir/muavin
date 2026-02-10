@@ -1,5 +1,6 @@
 import { validateEnv } from "./env";
 import { readFile, writeFile, unlink, mkdir } from "fs/promises";
+import { readFileSync } from "fs";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { sendTelegram } from "./telegram";
@@ -8,6 +9,7 @@ import {
   getAgent,
   updateAgent,
   listAgents,
+  buildSessionContext,
   type AgentFile,
 } from "./agents";
 
@@ -149,10 +151,12 @@ async function processAgents(): Promise<boolean> {
       console.log(
         `${timestamp()} Calling Claude for agent ${agent.id} (maxTurns: ${agentMaxTurns}, timeout: ${agentTimeoutMs}ms)`,
       );
+      const sessionContext = await buildSessionContext();
       const result = await callClaude(agent.prompt, {
         noSessionPersistence: true,
         timeoutMs: agentTimeoutMs,
         maxTurns: agentMaxTurns,
+        appendSystemPrompt: sessionContext,
       });
 
       console.log(
@@ -175,19 +179,18 @@ async function processAgents(): Promise<boolean> {
           ? recentMessages.map((r) => `[${r.source}] ${r.content}`).join("\n")
           : "No recent context found.";
 
-      const deliveryPrompt = `[Background Task Complete] Your background task "${agent.task}" has finished.
-
-Here is recent conversation context:
-${contextStr}
-
-Here are the raw results:
-${result.text}
-
-Synthesize these results and present them to the user naturally, as part of the ongoing conversation.`;
+      const promptsDir = join(process.env.HOME ?? "~", ".muavin", "prompts");
+      const deliveryTemplate = readFileSync(join(promptsDir, "agent-delivery.md"), "utf-8");
+      const deliveryPrompt = deliveryTemplate
+        .replace("{{TASK}}", agent.task)
+        .replace("{{CONTEXT}}", contextStr)
+        .replace("{{RESULTS}}", result.text);
 
       console.log(`${timestamp()} Calling Claude for delivery`);
+      const deliverySessionContext = await buildSessionContext();
       const deliveryResult = await callClaude(deliveryPrompt, {
         noSessionPersistence: true,
+        appendSystemPrompt: deliverySessionContext,
       });
 
       // Save delivered result

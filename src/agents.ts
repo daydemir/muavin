@@ -143,6 +143,71 @@ export async function getAgentSummary(): Promise<string> {
   return lines.join("\n");
 }
 
+export async function getJobsSummary(): Promise<string> {
+  const configPath = join(MUAVIN_DIR, "config.json");
+  const jobsPath = join(MUAVIN_DIR, "jobs.json");
+  const cronStatePath = join(MUAVIN_DIR, "cron-state.json");
+
+  const lines: string[] = [];
+
+  try {
+    // Load system jobs
+    const config = JSON.parse(await readFile(configPath, "utf-8"));
+    const systemJobs: Array<{ id: string; schedule: string; action?: string; prompt?: string }> = config.cron ?? [];
+
+    // Load user jobs
+    let userJobs: Array<{ id: string; name: string; schedule: string; prompt: string; enabled?: boolean }> = [];
+    try {
+      userJobs = JSON.parse(await readFile(jobsPath, "utf-8"));
+      userJobs = userJobs.filter(j => j.enabled !== false);
+    } catch {}
+
+    // Load cron state for last run times
+    let cronState: Record<string, number> = {};
+    try {
+      cronState = JSON.parse(await readFile(cronStatePath, "utf-8"));
+    } catch {}
+
+    if (systemJobs.length === 0 && userJobs.length === 0) return "";
+
+    lines.push("[Active Jobs]");
+    for (const job of systemJobs) {
+      const lastRun = cronState[job.id];
+      const lastRunStr = lastRun ? `last: ${timeAgoShort(lastRun)}` : "never run";
+      const label = job.action ?? "custom prompt";
+      lines.push(`  ${job.id} (system, ${label}) — ${job.schedule} — ${lastRunStr}`);
+    }
+    for (const job of userJobs) {
+      const lastRun = cronState[job.id];
+      const lastRunStr = lastRun ? `last: ${timeAgoShort(lastRun)}` : "never run";
+      lines.push(`  ${job.name || job.id} (user) — ${job.schedule} — ${lastRunStr}`);
+    }
+  } catch {
+    return "";
+  }
+
+  return lines.join("\n");
+}
+
+function timeAgoShort(ts: number): string {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+export async function buildSessionContext(): Promise<string | undefined> {
+  const parts: string[] = [];
+  const agentSummary = await getAgentSummary();
+  if (agentSummary) parts.push(agentSummary);
+  const jobsSummary = await getJobsSummary();
+  if (jobsSummary) parts.push(jobsSummary);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
 export async function cleanupAgents(maxAgeMs: number): Promise<number> {
   const agents = await listAgents();
   const now = Date.now();
