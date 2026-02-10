@@ -19,7 +19,7 @@ A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thisisdeniz/muavin/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/daydemir/muavin/main/install.sh | bash
 muavin setup
 ```
 
@@ -35,7 +35,7 @@ muavin setup
 ## Manual Installation
 
 ```bash
-git clone https://github.com/thisisdeniz/muavin.git ~/.muavin/src
+git clone https://github.com/daydemir/muavin.git ~/.muavin/src
 cd ~/.muavin/src
 bun install
 bun muavin setup
@@ -72,9 +72,11 @@ Muavin runs as three macOS launchd daemons:
 | `allowUsers` | Allowed Telegram user IDs | `[]` |
 | `allowGroups` | Allowed Telegram group IDs | `[]` |
 | `model` | Claude model (`sonnet`, `opus`, `haiku`) | `sonnet` |
-| `claudeTimeoutMs` | Max time per Claude call (ms) | `43200000` (12h) |
+| `claudeTimeoutMs` | Max time per Claude call (ms) | `43200000` |
+| `agentMaxTurns` | Max turns for background agents | `25` |
+| `agentTimeoutMs` | Timeout for background agents (ms) | `600000` |
+| `recentMessageCount` | Recent messages fetched from Supabase for context | `10` |
 | `startOnLogin` | Auto-start daemons on macOS login | `true` |
-| `cron` | Array of scheduled jobs | (see `config.example.json`) |
 
 `~/.muavin/.env`:
 
@@ -96,7 +98,7 @@ Muavin runs as three macOS launchd daemons:
 - [Grammy](https://grammy.dev) — Telegram bot framework
 - [Supabase](https://supabase.com) — pgvector for memory
 - [Croner](https://github.com/hexagon/croner) — cron scheduling
-- Inspired by [All-Hands-AI/OpenHands](https://github.com/All-Hands-AI/OpenHands) and [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers)
+- Inspired by [OpenClaw](https://github.com/openclaw/openclaw), [godagoo/claude-telegram-relay](https://github.com/godagoo/claude-telegram-relay), and [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
 
 ## License
 

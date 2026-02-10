@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Muavin installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/thisisdeniz/muavin/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/daydemir/muavin/main/install.sh | bash
 
-REPO="https://github.com/thisisdeniz/muavin.git"
+REPO="https://github.com/daydemir/muavin.git"
 INSTALL_DIR="$HOME/.muavin/src"
 
 echo ""
