@@ -224,6 +224,8 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
         resume: session.sessionId ?? undefined,
         appendSystemPrompt,
         timeoutMs: config.claudeTimeoutMs,
+        maxTurns: config.maxTurns ?? 100,
+        disallowedTools: ["Bash(claude*)"],
       });
 
       // Save session

@@ -113,7 +113,7 @@ bun muavin test      # Run smoke tests
 | `allowGroups` | Allowed Telegram group IDs | `[]` |
 | `model` | Claude model (`sonnet`, `opus`, `haiku`) | `sonnet` |
 | `claudeTimeoutMs` | Max time per Claude call (ms) | `43200000` |
-| `agentMaxTurns` | Max turns for background agents | `25` |
+| `maxTurns` | Max agentic turns per Claude CLI call | `100` |
 | `agentTimeoutMs` | Timeout for background agents (ms) | `600000` |
 | `recentMessageCount` | Recent messages fetched from Supabase for context | `10` |
 | `startOnLogin` | Auto-start daemons on macOS login | `true` |

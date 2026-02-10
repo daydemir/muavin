@@ -35,6 +35,7 @@ export async function callClaude(prompt: string, opts?: {
   maxTurns?: number;
   timeoutMs?: number;
   cwd?: string;
+  disallowedTools?: string[];
 }): Promise<ClaudeResult> {
   const args = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"];
 
@@ -44,6 +45,7 @@ export async function callClaude(prompt: string, opts?: {
   if (opts?.appendSystemPrompt) args.push("--append-system-prompt", opts.appendSystemPrompt);
   if (opts?.noSessionPersistence) args.push("--no-session-persistence");
   if (opts?.maxTurns) args.push("--max-turns", String(opts.maxTurns));
+  if (opts?.disallowedTools?.length) args.push("--disallowed-tools", ...opts.disallowedTools);
 
   const proc = spawn(args, {
     stdout: "pipe",

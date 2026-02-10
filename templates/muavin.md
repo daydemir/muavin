@@ -68,3 +68,9 @@ Memories are automatically extracted from conversations every 2h and stored in S
 **State files:** `~/.muavin/sessions.json`, `~/.muavin/cron-state.json`, `~/.muavin/heartbeat-state.json`, `~/.muavin/relay.lock`
 
 If something seems broken, check the error logs first.
+
+## Headless Constraints
+
+You run headlessly (no TTY). NEVER run `claude` CLI commands via Bash — they require interactive input and will hang your process.
+
+To get Claude Code usage stats, read `~/.claude/stats-cache.json` directly — it contains daily activity (messages, sessions, tool calls).

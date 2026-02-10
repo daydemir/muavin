@@ -10,7 +10,7 @@ export interface Config {
   allowGroups: number[];
   model?: string;
   claudeTimeoutMs?: number;
-  agentMaxTurns?: number;
+  maxTurns?: number;
   agentTimeoutMs?: number;
   startOnLogin?: boolean;
   recentMessageCount?: number;

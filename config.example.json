@@ -4,7 +4,7 @@
   "allowGroups": [],
   "model": "opus",
   "claudeTimeoutMs": 43200000,
-  "agentMaxTurns": 25,
+  "maxTurns": 100,
   "agentTimeoutMs": 600000,
   "recentMessageCount": 10,
   "startOnLogin": true

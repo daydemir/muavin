@@ -76,7 +76,7 @@ try {
 }
 
 const config = JSON.parse(await readFile(configPath, "utf-8"));
-const agentMaxTurns = config.agentMaxTurns ?? 25;
+const agentMaxTurns = config.maxTurns ?? 100;
 const agentTimeoutMs = config.agentTimeoutMs ?? 600000;
 
 // ── Core logic ──────────────────────────────────────────────────

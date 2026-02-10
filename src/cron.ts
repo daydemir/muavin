@@ -87,7 +87,7 @@ for (const job of jobs) {
       const appendSystemPrompt = await buildContext({ query: job.prompt });
       const result = await callClaude(fullPrompt, {
         noSessionPersistence: true,
-        maxTurns: 5,
+        maxTurns: config.maxTurns ?? 100,
         timeoutMs: config.claudeTimeoutMs,
         appendSystemPrompt,
       });
