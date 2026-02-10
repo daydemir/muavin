@@ -165,7 +165,7 @@ export async function extractMemories(): Promise<number> {
   }
 
   let extracted = 0;
-  const allMessageIds = messages.map(m => m.id);
+  const processedIds: number[] = [];
 
   try {
     for (const [chatId, msgs] of Object.entries(chunks)) {
@@ -214,13 +214,16 @@ ${conversation}`,
           console.error("extractMemories: failed to process fact:", e);
         }
       }
+
+      processedIds.push(...msgs.map(m => m.id));
     }
   } finally {
-    // Mark all processed messages regardless of success/failure
-    await supabase
-      .from("messages")
-      .update({ extracted_at: new Date().toISOString() })
-      .in("id", allMessageIds);
+    if (processedIds.length > 0) {
+      await supabase
+        .from("messages")
+        .update({ extracted_at: new Date().toISOString() })
+        .in("id", processedIds);
+    }
   }
 
   return extracted;
@@ -425,7 +428,12 @@ Output JSON only:
       // Find the memory content for context
       const mem = memories.find(m => m.id === item.id);
       const message = `Memory conflict:\n${mem ? `"${mem.content}"` : `(ID: ${item.id})`}\n\n${item.question}`;
-      await sendTelegram(config.owner, message);
+      const sent = await sendTelegram(config.owner, message);
+      if (sent) {
+        await logMessage("assistant", message, String(config.owner)).catch(e =>
+          console.error("logMessage failed:", e)
+        );
+      }
     }
     console.log(`Sent ${healthResult.clarify.length} clarification requests`);
   }
