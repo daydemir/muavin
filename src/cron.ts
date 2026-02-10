@@ -4,10 +4,10 @@ import { readFile, writeFile, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { syncMemoryMd, runHealthCheck, extractMemories } from "./memory";
+import { sendTelegram } from "./telegram";
 
 validateEnv();
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const STATE_FILE = join(MUAVIN_DIR, "cron-state.json");
 
@@ -36,22 +36,6 @@ async function saveState(state: CronState): Promise<void> {
   const tmpPath = STATE_FILE + ".tmp";
   await writeFile(tmpPath, JSON.stringify(state, null, 2));
   await rename(tmpPath, STATE_FILE);
-}
-
-async function sendTelegram(text: string): Promise<void> {
-  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: config.owner,
-      text,
-      parse_mode: "Markdown",
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error(`sendTelegram failed: ${res.status} ${body}`);
-  }
 }
 
 // Main
@@ -110,7 +94,7 @@ for (const job of jobs) {
       if (result.text.trim() === "SKIP") {
         console.log(`${job.id}: SKIP`);
       } else {
-        await sendTelegram(result.text);
+        await sendTelegram(config.owner, result.text, { parseMode: "Markdown" });
         console.log(`${job.id}: sent to Telegram`);
       }
     }

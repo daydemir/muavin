@@ -4,6 +4,7 @@ import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { createHash } from "crypto";
 import { callClaude } from "./claude";
+import { sendTelegram } from "./telegram";
 
 export const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -43,17 +44,6 @@ async function saveCronState(state: CronState): Promise<void> {
 async function loadConfig(): Promise<Config> {
   const content = await readFile(CONFIG_PATH, "utf-8");
   return JSON.parse(content);
-}
-
-async function sendTelegram(chatId: number, text: string): Promise<void> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN not set");
-
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  });
 }
 
 export async function embed(text: string): Promise<number[]> {

@@ -6,6 +6,7 @@ import OpenAI from "openai";
 import { Bot } from "grammy";
 import { readFile, writeFile, stat, mkdir } from "fs/promises";
 import { join } from "path";
+import { sendTelegram, checkPendingAlerts } from "./telegram";
 
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
@@ -153,6 +154,7 @@ async function main() {
     checkOpenAI(),
     checkTelegram(),
     checkErrorLogs(state.lastRun),
+    checkPendingAlerts(),
   ]);
 
   const failures: string[] = [];
@@ -173,15 +175,14 @@ async function main() {
       (Date.now() - state.lastAlertAt) < 2 * 60 * 60_000;
 
     if (!isDuplicate) {
-      try {
-        const config = await loadConfig();
-        const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN!);
-        await bot.api.sendMessage(config.owner, alertText);
+      const config = await loadConfig();
+      const sent = await sendTelegram(config.owner, alertText);
+      if (sent) {
         state.lastAlertText = alertText;
         state.lastAlertAt = Date.now();
         console.log("Alert sent to Telegram");
-      } catch (e) {
-        console.error("Failed to send heartbeat alert:", e);
+      } else {
+        console.error("Failed to send heartbeat alert (queued for retry)");
       }
     } else {
       console.log("Alert suppressed (duplicate within 2h)");
