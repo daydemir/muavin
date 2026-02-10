@@ -1,3 +1,4 @@
+<div align="center">
 <pre>
   _ __ ___  _   _  __ _ __  _(_)_ __
  | '_ ` _ \| | | |/ _` \ \ / / | '_ \
@@ -5,10 +6,17 @@
  |_| |_| |_|\__,_|\__,_| \_/ |_|_| |_|
 </pre>
 
-
 A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram.
 
-## Features
+[![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Bun](https://img.shields.io/badge/Bun-000000?logo=bun&logoColor=white)](https://bun.sh)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-cc785c?logo=anthropic&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
+[![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?logo=telegram&logoColor=white)](https://telegram.org)
+
+</div>
+
+## ✨ Features
 
 - **Claude Code brain** — spawns the Claude CLI for every request, with full tool access (filesystem, shell, web search, MCP servers)
 - **Persistent memory** — Supabase pgvector stores conversations and auto-extracted facts; relevant context is injected into every conversation
@@ -16,14 +24,50 @@ A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram
 - **Cron system** — configurable scheduled jobs (custom prompts or built-in actions) via `config.json`
 - **Health monitoring** — heartbeat daemon checks relay, cron, Supabase, OpenAI, Telegram; alerts via Telegram with 2h dedup
 
-## Quick Start
+## 🏗 Architecture
+
+```mermaid
+flowchart TD
+    You((You)) <-->|messages\nphotos\ndocs| TG[Telegram]
+
+    subgraph Daemons["macOS launchd daemons"]
+        Relay["🔄 Relay\n(KeepAlive)"]
+        Cron["⏰ Cron\n(every 15 min)"]
+        Heartbeat["💓 Heartbeat\n(every 30 min)"]
+    end
+
+    TG <--> Relay
+    TG <-- alerts --- Heartbeat
+    TG <-- job results --- Cron
+
+    Relay -->|spawns per message| Claude["🧠 Claude CLI"]
+    Relay <-->|store messages\nvector search| Supa[("Supabase\npgvector")]
+
+    Cron -->|extract facts\nmemory health| Supa
+    Cron -->|scheduled prompts| Claude
+
+    Claude --> MCP["MCP Servers\nGoogle Workspace · Apple Reminders\nApple Notes · Web · Files · Git"]
+
+    Heartbeat -.->|monitors| Relay
+    Heartbeat -.->|checks freshness| Cron
+    Heartbeat -.->|test query| Supa
+    Heartbeat -.->|test embed| OAI["OpenAI\n(embeddings)"]
+    Heartbeat -.->|getMe| TG
+
+    Supa <-.->|embed text| OAI
+```
+
+> Three launchd daemons: **Relay** receives Telegram messages and spawns Claude CLI with vector-searched memory context. **Cron** runs scheduled jobs — fact extraction, memory health checks, and custom prompts. **Heartbeat** monitors all services and sends AI-triaged alerts.
+
+## 🚀 Quick Start
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/daydemir/muavin/main/install.sh | bash
 muavin setup
 ```
 
-## Prerequisites
+<details>
+<summary><strong>Prerequisites</strong></summary>
 
 - macOS (Apple Silicon or Intel)
 - [Bun](https://bun.sh) runtime
@@ -32,7 +76,10 @@ muavin setup
 - [Supabase](https://supabase.com) project (free tier works)
 - [OpenAI API key](https://platform.openai.com/api-keys) (for embeddings)
 
-## Manual Installation
+</details>
+
+<details>
+<summary><strong>Manual Installation</strong></summary>
 
 ```bash
 git clone https://github.com/daydemir/muavin.git ~/.muavin/src
@@ -41,7 +88,9 @@ bun install
 bun muavin setup
 ```
 
-## Usage
+</details>
+
+## 💻 Usage
 
 ```bash
 bun muavin setup     # Interactive setup wizard
@@ -52,17 +101,8 @@ bun muavin config    # Edit configuration (TUI)
 bun muavin test      # Run smoke tests
 ```
 
-## How It Works
-
-Muavin runs as three macOS launchd daemons:
-
-- **Relay** — Grammy Telegram bot (KeepAlive). Receives messages, vector-searches Supabase for context, spawns `claude` CLI, returns response.
-- **Cron** — Runs every 15 minutes. Executes scheduled jobs from `config.json`: memory extraction (every 2h), health audit (daily), and custom prompts.
-- **Heartbeat** — Runs every 30 minutes. Checks relay, cron, Supabase, OpenAI, Telegram. Sends alerts with 2h dedup.
-
-**Memory**: Conversations are stored in Supabase with OpenAI embeddings. A cron job extracts facts every 2h and deduplicates against existing memories. Relevant context is vector-searched and injected into every conversation.
-
-## Configuration
+<details>
+<summary><strong>⚙️ Configuration</strong></summary>
 
 `~/.muavin/config.json`:
 
@@ -92,7 +132,9 @@ Muavin runs as three macOS launchd daemons:
 | `OPENROUTER_API_KEY` | No | OpenRouter access |
 | `BRAVE_API_KEY` | No | Brave Search |
 
-## Credits & Inspiration
+</details>
+
+## 🙏 Credits
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) by Anthropic
 - [Grammy](https://grammy.dev) — Telegram bot framework
