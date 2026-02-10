@@ -623,6 +623,7 @@ async function configCommand() {
     { key: "OPENAI_API_KEY", label: "OpenAI API key", source: "env" },
     { key: "GROK_API_KEY", label: "Grok API key", source: "env" },
     { key: "GEMINI_API_KEY", label: "Gemini API key", source: "env" },
+    { key: "claudeTimeoutMs", label: "Claude timeout (ms)", source: "config" },
   ];
 
   while (true) {
@@ -694,6 +695,10 @@ async function configCommand() {
         currentConfig.owner = uid;
         if (!Array.isArray(currentConfig.allowUsers)) currentConfig.allowUsers = [];
         if (!currentConfig.allowUsers.includes(uid)) currentConfig.allowUsers.push(uid);
+      } else if (field.key === "claudeTimeoutMs") {
+        const ms = Number(newValue);
+        if (isNaN(ms) || ms <= 0) { fail("Must be a positive number"); continue; }
+        currentConfig.claudeTimeoutMs = ms;
       } else {
         currentConfig[field.key] = newValue;
       }
@@ -712,6 +717,17 @@ async function deployCommand() {
   heading("Building and deploying...\n");
 
   const homeDir = process.env.HOME!;
+
+  // Validate required env vars before building
+  const envPath = `${homeDir}/.muavin/.env`;
+  const envVars = await parseEnvFile(envPath);
+  const requiredKeys = ["TELEGRAM_BOT_TOKEN", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "OPENAI_API_KEY"];
+  const missing = requiredKeys.filter((k) => !envVars[k]);
+  if (missing.length > 0) {
+    fail(`Missing required env vars: ${missing.join(", ")}\nCheck ~/.muavin/.env`);
+    return;
+  }
+
   const repoRoot = resolve(import.meta.dir, "..");
   const distDir = `${repoRoot}/dist`;
   const muavinBinDir = `${homeDir}/.muavin/bin`;
