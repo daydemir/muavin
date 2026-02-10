@@ -20,6 +20,14 @@ Do this once, then never ask again. -->
 - Filesystem + shell: Full access
 - Git/GitHub: Built-in
 
+## Config
+- `model` in `~/.muavin/config.json` controls which Claude model Muavin uses (valid: "sonnet", "opus", "haiku"). Change it when asked.
+
+## API Keys
+- OpenAI: Used for embeddings and available for other OpenAI calls (required)
+- Grok (xAI): If configured in ~/.muavin/.env, use for tasks where Grok is appropriate
+- Gemini (Google): If configured in ~/.muavin/.env, use for tasks where Gemini is appropriate
+
 <behavior>
 
 ## Communication Style

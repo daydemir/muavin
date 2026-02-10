@@ -27,11 +27,15 @@ async function main() {
     case "test":
       await testCommand();
       break;
+    case "config":
+      await configCommand();
+      break;
     default:
       heading("Muavin CLI\n");
       console.log("Usage: bun muavin <command>\n");
       console.log("Commands:");
       console.log("  setup   - Interactive setup wizard");
+      console.log("  config  - Edit configuration");
       console.log("  start   - Deploy launch daemons");
       console.log("  status  - Check daemon and session status");
       console.log("  test    - Run smoke tests");
@@ -41,6 +45,18 @@ async function main() {
 
 async function setupCommand() {
   heading("🚀 Muavin Setup Wizard\n");
+
+  console.log(pc.yellow(
+    "⚠ WARNING: Muavin runs Claude Code autonomously and may consume\n" +
+    "significant API tokens. It can read/write files, run commands, and\n" +
+    "access your data. Use at your own risk.\n"
+  ));
+  const consent = prompt('Type "yes" to proceed: ');
+  if (consent?.toLowerCase() !== "yes") {
+    console.log("Setup cancelled.");
+    return;
+  }
+  console.log();
 
   // Step 1: Check prerequisites
   if (!await checkPrereqs()) {
@@ -61,7 +77,7 @@ async function setupCommand() {
   if (!telegram) {
     telegram = await setupTelegram();
     if (!telegram) return;
-    await updateEnvFile(telegram);
+    await updateEnvFile({ TELEGRAM_BOT_TOKEN: telegram.token });
     await updateMuavinConfig(telegram.userId);
   }
 
@@ -70,18 +86,30 @@ async function setupCommand() {
   if (!supabase) {
     supabase = await setupSupabase();
     if (!supabase) return;
-    await updateEnvFile(telegram, supabase);
+    await updateEnvFile({ SUPABASE_URL: supabase.url, SUPABASE_SERVICE_KEY: supabase.key });
   }
 
-  // Step 4: Verify all services
+  // Step 4: Setup OpenAI (or skip if already configured)
+  let openaiKey = await checkExistingOpenAI(existingEnv);
+  if (!openaiKey) {
+    openaiKey = await setupOpenAI();
+    if (!openaiKey) return;
+    await updateEnvFile({ OPENAI_API_KEY: openaiKey });
+  }
+  process.env.OPENAI_API_KEY = openaiKey;
+
+  // Step 5: Optional API keys
+  await setupOptionalKeys(existingEnv);
+
+  // Step 6: Verify all services
   if (!await verifyAll()) {
     return;
   }
 
-  // Step 5: Finalize
+  // Step 7: Finalize
   await copyCLAUDEmd();
 
-  // Step 6: Offer deploy
+  // Step 8: Offer deploy
   const shouldStart = prompt("Start daemons now? (y/n): ");
   if (shouldStart?.toLowerCase() === "y") {
     await deployCommand();
@@ -152,6 +180,26 @@ async function checkExistingTelegram(
     return { token, userId };
   } catch {
     warn("Could not validate existing Telegram token, re-configuring...\n");
+    return null;
+  }
+}
+
+async function checkExistingOpenAI(
+  existingEnv: Record<string, string>
+): Promise<string | null> {
+  const key = existingEnv.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  if (!key) return null;
+
+  try {
+    const openai = new OpenAI({ apiKey: key });
+    await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: "test",
+    });
+    ok("OpenAI already configured\n");
+    return key;
+  } catch {
+    warn("Existing OpenAI key is invalid, re-configuring...\n");
     return null;
   }
 }
@@ -313,6 +361,53 @@ async function setupTelegram(): Promise<{ token: string; userId: string } | null
   return { token, userId };
 }
 
+async function setupOpenAI(): Promise<string | null> {
+  heading("Setting up OpenAI...");
+  dim("1. Go to https://platform.openai.com/api-keys");
+  dim("2. Create a new API key");
+  dim("3. Copy the key\n");
+
+  const key = prompt("Enter your OpenAI API key: ");
+  if (!key) {
+    fail("No key provided");
+    return null;
+  }
+
+  try {
+    const openai = new OpenAI({ apiKey: key });
+    await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: "test",
+    });
+    ok("OpenAI API verified\n");
+    return key;
+  } catch {
+    fail("Invalid OpenAI API key");
+    return null;
+  }
+}
+
+async function setupOptionalKeys(existingEnv: Record<string, string>) {
+  const optionalKeys = [
+    { envVar: "GROK_API_KEY", name: "Grok (xAI)" },
+    { envVar: "GEMINI_API_KEY", name: "Gemini (Google)" },
+  ];
+
+  for (const { envVar, name } of optionalKeys) {
+    if (existingEnv[envVar]) {
+      ok(`${name} already configured`);
+      continue;
+    }
+
+    const value = prompt(`Enter your ${name} API key (press Enter to skip): `);
+    if (value) {
+      await updateEnvFile({ [envVar]: value });
+      ok(`${name} key saved`);
+    }
+  }
+  console.log();
+}
+
 async function setupSupabase(): Promise<{ url: string; key: string } | null> {
   heading("Setting up Supabase...");
   dim("1. Go to your Supabase project dashboard");
@@ -420,10 +515,7 @@ async function verifyAll(): Promise<boolean> {
   return true;
 }
 
-async function updateEnvFile(
-  telegram: { token: string; userId: string },
-  supabase?: { url: string; key: string }
-) {
+async function updateEnvFile(updates: Record<string, string>) {
   const homeDir = process.env.HOME!;
   const muavinDir = `${homeDir}/.muavin`;
   const envPath = `${muavinDir}/.env`;
@@ -442,22 +534,28 @@ async function updateEnvFile(
   }
 
   const lines = content.split("\n");
-
-  const updates: Record<string, string> = {
-    TELEGRAM_BOT_TOKEN: telegram.token,
-  };
-  if (supabase) {
-    updates.SUPABASE_URL = supabase.url;
-    updates.SUPABASE_SERVICE_KEY = supabase.key;
-  }
+  const foundKeys = new Set<string>();
 
   const updatedLines = lines.map((line) => {
     const match = line.match(/^([A-Z_]+)=/);
     if (match && match[1] in updates) {
+      foundKeys.add(match[1]);
       return `${match[1]}=${updates[match[1]]}`;
     }
     return line;
   });
+
+  // Append any keys that weren't found in the template
+  for (const key in updates) {
+    if (!foundKeys.has(key)) {
+      // Find the last non-empty line
+      let insertIndex = updatedLines.length;
+      while (insertIndex > 0 && updatedLines[insertIndex - 1].trim() === "") {
+        insertIndex--;
+      }
+      updatedLines.splice(insertIndex, 0, `${key}=${updates[key]}`);
+    }
+  }
 
   await Bun.write(envPath, updatedLines.join("\n"));
   ok(".env file updated");
@@ -501,6 +599,113 @@ async function copyCLAUDEmd() {
   const example = await Bun.file(examplePath).text();
   await Bun.write(destPath, example);
   ok("Created CLAUDE.md from CLAUDE.example.md");
+}
+
+function maskValue(value: string): string {
+  if (value.length <= 8) return "****";
+  return value.slice(0, 4) + "..." + value.slice(-3);
+}
+
+async function configCommand() {
+  const homeDir = process.env.HOME!;
+  const muavinDir = `${homeDir}/.muavin`;
+  const envPath = `${muavinDir}/.env`;
+  const configPath = `${muavinDir}/config.json`;
+
+  const env = await parseEnvFile(envPath);
+  const config = await parseConfigFile(configPath);
+
+  const fields = [
+    { key: "TELEGRAM_BOT_TOKEN", label: "Telegram bot token", source: "env" },
+    { key: "owner", label: "Telegram user ID", source: "config" },
+    { key: "SUPABASE_URL", label: "Supabase URL", source: "env" },
+    { key: "SUPABASE_SERVICE_KEY", label: "Supabase service key", source: "env" },
+    { key: "OPENAI_API_KEY", label: "OpenAI API key", source: "env" },
+    { key: "GROK_API_KEY", label: "Grok API key", source: "env" },
+    { key: "GEMINI_API_KEY", label: "Gemini API key", source: "env" },
+  ];
+
+  while (true) {
+    heading("\nMuavin Configuration\n");
+
+    for (let i = 0; i < fields.length; i++) {
+      const f = fields[i];
+      let value: string;
+      if (f.source === "config") {
+        value = config?.[f.key]?.toString() ?? "";
+      } else {
+        value = env[f.key] ?? "";
+      }
+      const display = value ? maskValue(value) : pc.dim("(not set)");
+      console.log(`  ${i + 1}. ${f.label.padEnd(22)} ${display}`);
+    }
+
+    console.log();
+    const choice = prompt("Enter number to edit (or Enter to exit): ");
+    if (!choice) break;
+
+    const idx = parseInt(choice, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= fields.length) {
+      warn("Invalid choice");
+      continue;
+    }
+
+    const field = fields[idx];
+    const newValue = prompt(`Enter new ${field.label}: `);
+    if (!newValue) continue;
+
+    // Validate where applicable
+    if (field.key === "TELEGRAM_BOT_TOKEN") {
+      try {
+        const response = await fetch(`https://api.telegram.org/bot${newValue}/getMe`);
+        const data = await response.json();
+        if (!data.ok) { fail("Invalid bot token"); continue; }
+        ok(`Bot validated: @${data.result.username}`);
+      } catch { fail("Failed to validate bot token"); continue; }
+    }
+
+    if (field.key === "SUPABASE_URL" || field.key === "SUPABASE_SERVICE_KEY") {
+      const url = field.key === "SUPABASE_URL" ? newValue : env.SUPABASE_URL;
+      const key = field.key === "SUPABASE_SERVICE_KEY" ? newValue : env.SUPABASE_SERVICE_KEY;
+      if (url && key) {
+        try {
+          const client = createClient(url, key);
+          const { error } = await client.from("messages").select("id").limit(1);
+          if (error) { fail(`Supabase error: ${error.message}`); continue; }
+          ok("Supabase connection verified");
+        } catch { fail("Failed to connect to Supabase"); continue; }
+      }
+    }
+
+    if (field.key === "OPENAI_API_KEY") {
+      try {
+        const openai = new OpenAI({ apiKey: newValue });
+        await openai.embeddings.create({ model: "text-embedding-3-small", input: "test" });
+        ok("OpenAI API verified");
+      } catch { fail("Invalid OpenAI API key"); continue; }
+    }
+
+    // Save the value
+    if (field.source === "config") {
+      const currentConfig = await parseConfigFile(configPath) ?? {};
+      if (field.key === "owner") {
+        const uid = Number(newValue);
+        if (isNaN(uid)) { fail("Must be numeric"); continue; }
+        currentConfig.owner = uid;
+        if (!Array.isArray(currentConfig.allowUsers)) currentConfig.allowUsers = [];
+        if (!currentConfig.allowUsers.includes(uid)) currentConfig.allowUsers.push(uid);
+      } else {
+        currentConfig[field.key] = newValue;
+      }
+      await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
+      config[field.key] = newValue;
+    } else {
+      await updateEnvFile({ [field.key]: newValue });
+      env[field.key] = newValue;
+    }
+
+    ok(`${field.label} updated`);
+  }
 }
 
 async function deployCommand() {

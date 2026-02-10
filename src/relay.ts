@@ -213,6 +213,7 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
       const result = await callClaude(fullPrompt, {
         resume: session.sessionId ?? undefined,
         appendSystemPrompt,
+        timeoutMs: config.claudeTimeoutMs,
       });
 
       // Save session

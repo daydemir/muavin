@@ -1,4 +1,25 @@
 import { spawn } from "bun";
+import { readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+
+const ALLOWED_MODELS = ["sonnet", "opus", "haiku"];
+
+function loadModelFromConfig(): string | null {
+  try {
+    const raw = readFileSync(join(homedir(), ".muavin", "config.json"), "utf-8");
+    const config = JSON.parse(raw);
+    if (typeof config.model === "string" && ALLOWED_MODELS.includes(config.model)) {
+      return config.model;
+    }
+    if (config.model != null) {
+      console.warn(`[claude] invalid model "${config.model}" in config, ignoring (allowed: ${ALLOWED_MODELS.join(", ")})`);
+    }
+  } catch {}
+  return null;
+}
+
+const configModel = loadModelFromConfig();
 
 export interface ClaudeResult {
   text: string;
@@ -12,8 +33,11 @@ export async function callClaude(prompt: string, opts?: {
   appendSystemPrompt?: string;
   noSessionPersistence?: boolean;
   maxTurns?: number;
+  timeoutMs?: number;
 }): Promise<ClaudeResult> {
   const args = ["claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"];
+
+  if (configModel) args.push("--model", configModel);
 
   if (opts?.resume) args.push("--resume", opts.resume);
   if (opts?.appendSystemPrompt) args.push("--append-system-prompt", opts.appendSystemPrompt);
@@ -26,21 +50,41 @@ export async function callClaude(prompt: string, opts?: {
     env: { ...process.env },
   });
 
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
+  const processPromise = (async () => {
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
 
-  if (exitCode !== 0) {
-    throw new Error(`Claude exited ${exitCode}: ${stderr}`);
+    if (exitCode !== 0) {
+      throw new Error(`Claude exited ${exitCode}: ${stderr}`);
+    }
+
+    const parsed = JSON.parse(stdout);
+    return {
+      text: parsed.result ?? stdout,
+      sessionId: parsed.session_id ?? "",
+      costUsd: parsed.total_cost_usd ?? 0,
+      durationMs: parsed.duration_ms ?? 0,
+    };
+  })();
+
+  if (opts?.timeoutMs) {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        proc.kill();
+        const hours = Math.floor(opts.timeoutMs! / 3600000);
+        const minutes = Math.floor((opts.timeoutMs! % 3600000) / 60000);
+        const parts = [];
+        if (hours > 0) parts.push(`${hours}h`);
+        if (minutes > 0) parts.push(`${minutes}m`);
+        reject(new Error(`Claude timed out after ${parts.join(" ")}`));
+      }, opts.timeoutMs);
+    });
+
+    return Promise.race([processPromise, timeoutPromise]);
   }
 
-  const parsed = JSON.parse(stdout);
-  return {
-    text: parsed.result ?? stdout,
-    sessionId: parsed.session_id ?? "",
-    costUsd: parsed.total_cost_usd ?? 0,
-    durationMs: parsed.duration_ms ?? 0,
-  };
+  return processPromise;
 }
 
 // Test block — run with: bun run src/claude.ts

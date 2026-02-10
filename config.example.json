@@ -2,17 +2,9 @@
   "owner": 0,
   "allowUsers": [],
   "allowGroups": [],
+  "model": "opus",
+  "claudeTimeoutMs": 43200000,
   "cron": [
-    {
-      "id": "morning-briefing",
-      "prompt": "Morning briefing. Check what's on the calendar today, check reminders, review goals from memory. Be brief. If nothing notable, respond with just SKIP.",
-      "schedule": "0 8 * * *"
-    },
-    {
-      "id": "checkin",
-      "prompt": "Quick check: anything needing attention in the next 2 hours? Check calendar, reminders. If nothing urgent, respond with SKIP.",
-      "schedule": "0 9-22 * * *"
-    },
     {
       "id": "memory-sync",
       "action": "sync-memory",

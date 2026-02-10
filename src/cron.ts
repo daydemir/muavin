@@ -104,6 +104,7 @@ for (const job of jobs) {
       const result = await callClaude(fullPrompt, {
         noSessionPersistence: true,
         maxTurns: 5,
+        timeoutMs: config.claudeTimeoutMs,
       });
 
       if (result.text.trim() === "SKIP") {
