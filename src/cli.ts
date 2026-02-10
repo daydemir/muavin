@@ -11,7 +11,7 @@ async function main() {
     case "setup":
       await setupCommand();
       break;
-    case "deploy":
+    case "start":
       await deployCommand();
       break;
     case "status":
@@ -25,10 +25,10 @@ async function main() {
       console.log("Usage: bun muavin <command>\n");
       console.log("Commands:");
       console.log("  setup   - Interactive setup wizard");
-      console.log("  deploy  - Deploy launch daemons");
+      console.log("  start   - Deploy launch daemons");
       console.log("  status  - Check daemon and session status");
       console.log("  test    - Run smoke tests");
-      process.exit(1);
+      process.exit(0);
   }
 }
 
@@ -40,13 +40,28 @@ async function setupCommand() {
     return;
   }
 
-  // Step 2: Setup Telegram
-  const telegram = await setupTelegram();
-  if (!telegram) return;
+  // Check for existing config
+  const homeDir = process.env.HOME!;
+  const muavinDir = `${homeDir}/.muavin`;
+  const envPath = `${muavinDir}/.env`;
+  const configPath = `${muavinDir}/config.json`;
 
-  // Step 3: Setup Supabase
-  const supabase = await setupSupabase();
-  if (!supabase) return;
+  const existingEnv = await parseEnvFile(envPath);
+  const existingConfig = await parseConfigFile(configPath);
+
+  // Step 2: Setup Telegram (or skip if already configured)
+  let telegram = await checkExistingTelegram(existingEnv, existingConfig);
+  if (!telegram) {
+    telegram = await setupTelegram();
+    if (!telegram) return;
+  }
+
+  // Step 3: Setup Supabase (or skip if already configured)
+  let supabase = await checkExistingSupabase(existingEnv);
+  if (!supabase) {
+    supabase = await setupSupabase();
+    if (!supabase) return;
+  }
 
   // Step 4: Verify all services
   if (!await verifyAll()) {
@@ -59,12 +74,142 @@ async function setupCommand() {
   await copyCLAUDEmd();
 
   // Step 6: Offer deploy
-  const shouldDeploy = prompt("Deploy daemons now? (y/n): ");
-  if (shouldDeploy?.toLowerCase() === "y") {
+  const shouldStart = prompt("Start daemons now? (y/n): ");
+  if (shouldStart?.toLowerCase() === "y") {
     await deployCommand();
   }
 
   console.log("\n✓ Setup complete!");
+}
+
+async function parseEnvFile(envPath: string): Promise<Record<string, string>> {
+  try {
+    const file = Bun.file(envPath);
+    if (!await file.exists()) {
+      return {};
+    }
+    const content = await file.text();
+    const env: Record<string, string> = {};
+    for (const line of content.split("\n")) {
+      const match = line.match(/^([A-Z_]+)=(.*)$/);
+      if (match) {
+        env[match[1]] = match[2];
+      }
+    }
+    return env;
+  } catch {
+    return {};
+  }
+}
+
+async function parseConfigFile(configPath: string): Promise<any> {
+  try {
+    const file = Bun.file(configPath);
+    if (!await file.exists()) {
+      return null;
+    }
+    return await file.json();
+  } catch {
+    return null;
+  }
+}
+
+async function checkExistingTelegram(
+  existingEnv: Record<string, string>,
+  existingConfig: any
+): Promise<{ token: string; userId: string } | null> {
+  const token = existingEnv.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    return null;
+  }
+
+  // Validate token
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    const data = await response.json();
+    if (!data.ok) {
+      console.log("⚠ Existing Telegram token is invalid, re-configuring...\n");
+      return null;
+    }
+
+    // Get userId from config
+    const userId = existingConfig?.owner?.toString();
+    if (!userId || !/^\d+$/.test(userId)) {
+      console.log("⚠ Telegram token valid but user ID missing, re-configuring...\n");
+      return null;
+    }
+
+    console.log(`✓ Telegram already configured (@${data.result.username})\n`);
+    return { token, userId };
+  } catch {
+    console.log("⚠ Could not validate existing Telegram token, re-configuring...\n");
+    return null;
+  }
+}
+
+async function checkExistingSupabase(
+  existingEnv: Record<string, string>
+): Promise<{ url: string; key: string } | null> {
+  const url = existingEnv.SUPABASE_URL;
+  const key = existingEnv.SUPABASE_SERVICE_KEY;
+
+  if (!url || !key) {
+    return null;
+  }
+
+  // Test connection and check if tables exist
+  const client = createClient(url, key);
+  try {
+    const { error } = await client.from("messages").select("id").limit(1);
+
+    if (error && (error.code === "42P01" || error.message?.includes("not find the table"))) {
+      console.log("⚠ Supabase credentials exist but tables not found, setting up schema...\n");
+
+      // Extract project ref from URL
+      const match = url.match(/https:\/\/([^.]+)\.supabase\.co/);
+      if (!match) {
+        console.log("✗ Could not extract project reference from URL");
+        return null;
+      }
+      const projectRef = match[1];
+
+      // Copy schema SQL to clipboard and open SQL editor
+      const schemaPath = resolve(import.meta.dir, "..", "supabase-schema.sql");
+      const schemaSql = await Bun.file(schemaPath).text();
+      const pbcopy = Bun.spawn(["pbcopy"], { stdin: "pipe" });
+      pbcopy.stdin.write(schemaSql);
+      pbcopy.stdin.end();
+      await pbcopy.exited;
+
+      const sqlEditorUrl = `https://supabase.com/dashboard/project/${projectRef}/sql/new`;
+      Bun.spawn(["open", sqlEditorUrl]);
+
+      console.log("✓ Schema SQL copied to clipboard");
+      console.log("✓ Opening SQL Editor in browser");
+      console.log("\nJust paste (⌘V) and click Run.\n");
+
+      prompt("Press Enter when done...");
+
+      // Re-verify
+      const { error: retryError } = await client.from("messages").select("id").limit(1);
+      if (retryError && (retryError.code === "42P01" || retryError.message?.includes("not find the table"))) {
+        console.log("✗ Tables still not found");
+        return null;
+      }
+
+      console.log("✓ Supabase connection verified\n");
+      return { url, key };
+    } else if (error) {
+      console.log("⚠ Supabase credentials exist but connection failed, re-configuring...\n");
+      return null;
+    }
+
+    console.log("✓ Supabase already configured\n");
+    return { url, key };
+  } catch {
+    console.log("⚠ Could not validate existing Supabase credentials, re-configuring...\n");
+    return null;
+  }
 }
 
 async function checkPrereqs(): Promise<boolean> {
@@ -137,6 +282,9 @@ async function setupTelegram(): Promise<{ token: string; userId: string } | null
 
 async function setupSupabase(): Promise<{ url: string; key: string } | null> {
   console.log("Setting up Supabase...");
+  console.log("1. Go to your Supabase project dashboard");
+  console.log("2. Settings → API → Project API keys");
+  console.log("3. Copy the 'service_role' key (the secret one, NOT anon)\n");
 
   const url = prompt("Enter your Supabase project URL (e.g., https://xxxx.supabase.co): ");
   if (!url) {
@@ -155,7 +303,7 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
   try {
     const { error } = await client.from("messages").select("id").limit(1);
 
-    if (error && error.code === "42P01") {
+    if (error && (error.code === "42P01" || error.message?.includes("not find the table"))) {
       console.log("\n✗ Tables not found. Setting up schema...");
 
       // Extract project ref from URL
@@ -166,16 +314,26 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
       }
       const projectRef = match[1];
 
-      console.log("\n1. Open this URL:");
-      console.log(`   https://supabase.com/dashboard/project/${projectRef}/sql/new`);
-      console.log("2. Copy the contents of supabase-schema.sql");
-      console.log("3. Paste into the SQL Editor and run it\n");
+      // Copy schema SQL to clipboard and open SQL editor
+      const schemaPath = resolve(import.meta.dir, "..", "supabase-schema.sql");
+      const schemaSql = await Bun.file(schemaPath).text();
+      const pbcopy = Bun.spawn(["pbcopy"], { stdin: "pipe" });
+      pbcopy.stdin.write(schemaSql);
+      pbcopy.stdin.end();
+      await pbcopy.exited;
+
+      const sqlEditorUrl = `https://supabase.com/dashboard/project/${projectRef}/sql/new`;
+      Bun.spawn(["open", sqlEditorUrl]);
+
+      console.log("\n✓ Schema SQL copied to clipboard");
+      console.log("✓ Opening SQL Editor in browser");
+      console.log("\nJust paste (⌘V) and click Run.\n");
 
       prompt("Press Enter when done...");
 
       // Re-verify
       const { error: retryError } = await client.from("messages").select("id").limit(1);
-      if (retryError && retryError.code === "42P01") {
+      if (retryError && (retryError.code === "42P01" || retryError.message?.includes("not find the table"))) {
         console.log("✗ Tables still not found");
         return null;
       }
