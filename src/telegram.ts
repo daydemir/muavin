@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
+import { logMessage } from "./memory";
 
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const PENDING_ALERTS_PATH = join(MUAVIN_DIR, "pending-alerts.json");
@@ -63,6 +64,10 @@ export async function sendTelegram(
 
     return false;
   }
+
+  await logMessage("assistant", text, String(chatId)).catch(e =>
+    console.error("sendTelegram logMessage failed:", e)
+  );
 
   return true;
 }

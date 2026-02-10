@@ -428,12 +428,7 @@ Output JSON only:
       // Find the memory content for context
       const mem = memories.find(m => m.id === item.id);
       const message = `Memory conflict:\n${mem ? `"${mem.content}"` : `(ID: ${item.id})`}\n\n${item.question}`;
-      const sent = await sendTelegram(config.owner, message);
-      if (sent) {
-        await logMessage("assistant", message, String(config.owner)).catch(e =>
-          console.error("logMessage failed:", e)
-        );
-      }
+      await sendTelegram(config.owner, message);
     }
     console.log(`Sent ${healthResult.clarify.length} clarification requests`);
   }
