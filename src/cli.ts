@@ -54,6 +54,8 @@ async function setupCommand() {
   if (!telegram) {
     telegram = await setupTelegram();
     if (!telegram) return;
+    await updateEnvFile(telegram);
+    await updateMuavinConfig(telegram.userId);
   }
 
   // Step 3: Setup Supabase (or skip if already configured)
@@ -61,6 +63,7 @@ async function setupCommand() {
   if (!supabase) {
     supabase = await setupSupabase();
     if (!supabase) return;
+    await updateEnvFile(telegram, supabase);
   }
 
   // Step 4: Verify all services
@@ -68,9 +71,7 @@ async function setupCommand() {
     return;
   }
 
-  // Step 5: Update .env file and muavin.json
-  await updateEnvFile(telegram, supabase);
-  await updateMuavinConfig(telegram.userId);
+  // Step 5: Finalize
   await copyCLAUDEmd();
 
   // Step 6: Offer deploy
@@ -387,7 +388,7 @@ async function verifyAll(): Promise<boolean> {
 
 async function updateEnvFile(
   telegram: { token: string; userId: string },
-  supabase: { url: string; key: string }
+  supabase?: { url: string; key: string }
 ) {
   const homeDir = process.env.HOME!;
   const muavinDir = `${homeDir}/.muavin`;
@@ -410,9 +411,11 @@ async function updateEnvFile(
 
   const updates: Record<string, string> = {
     TELEGRAM_BOT_TOKEN: telegram.token,
-    SUPABASE_URL: supabase.url,
-    SUPABASE_SERVICE_KEY: supabase.key,
   };
+  if (supabase) {
+    updates.SUPABASE_URL = supabase.url;
+    updates.SUPABASE_SERVICE_KEY = supabase.key;
+  }
 
   const updatedLines = lines.map((line) => {
     const match = line.match(/^([A-Z_]+)=/);
