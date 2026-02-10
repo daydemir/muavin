@@ -7,9 +7,7 @@
     <string>com.muavin.relay</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__BUN_PATH__</string>
-        <string>run</string>
-        <string>__REPO_PATH__/src/relay.ts</string>
+        <string>__MUAVIN_BIN__/muavin-relay</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__HOME__/.muavin</string>

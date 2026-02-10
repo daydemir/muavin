@@ -5,13 +5,16 @@
   "scripts": {
     "relay": "bun run src/relay.ts",
     "cron": "bun run src/cron.ts",
+    "heartbeat": "bun run src/heartbeat.ts",
     "dev": "bun run --watch src/relay.ts",
-    "muavin": "bun run src/cli.ts"
+    "muavin": "bun run src/cli.ts",
+    "build": "bun build --compile src/relay.ts --outfile dist/muavin-relay && bun build --compile src/cron.ts --outfile dist/muavin-cron && bun build --compile src/heartbeat.ts --outfile dist/muavin-heartbeat && codesign --force --sign - --identifier com.muavin.relay dist/muavin-relay && codesign --force --sign - --identifier com.muavin.cron dist/muavin-cron && codesign --force --sign - --identifier com.muavin.heartbeat dist/muavin-heartbeat"
   },
   "dependencies": {
-    "grammy": "^1.21.1",
     "@supabase/supabase-js": "^2.45.0",
-    "openai": "^4.73.0"
+    "grammy": "^1.21.1",
+    "openai": "^4.73.0",
+    "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@types/bun": "latest"

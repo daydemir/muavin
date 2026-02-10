@@ -1,8 +1,10 @@
-import "./env";
+import { validateEnv } from "./env";
 import { readFile, writeFile, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { syncMemoryMd, runHealthCheck, extractMemories } from "./memory";
+
+validateEnv();
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
@@ -37,7 +39,7 @@ async function saveState(state: CronState): Promise<void> {
 }
 
 async function sendTelegram(text: string): Promise<void> {
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -46,6 +48,10 @@ async function sendTelegram(text: string): Promise<void> {
       parse_mode: "Markdown",
     }),
   });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error(`sendTelegram failed: ${res.status} ${body}`);
+  }
 }
 
 // Main

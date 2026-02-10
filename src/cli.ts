@@ -3,6 +3,13 @@ import OpenAI from "openai";
 import { Bot } from "grammy";
 import { resolve } from "path";
 import { mkdir } from "fs/promises";
+import pc from "picocolors";
+
+const ok = (msg: string) => console.log(pc.green(`✓ ${msg}`));
+const fail = (msg: string) => console.error(pc.red(`✗ ${msg}`));
+const warn = (msg: string) => console.log(pc.yellow(`⚠ ${msg}`));
+const heading = (msg: string) => console.log(pc.bold(msg));
+const dim = (msg: string) => console.log(pc.dim(msg));
 
 async function main() {
   const command = Bun.argv[2];
@@ -21,7 +28,7 @@ async function main() {
       await testCommand();
       break;
     default:
-      console.log("Muavin CLI\n");
+      heading("Muavin CLI\n");
       console.log("Usage: bun muavin <command>\n");
       console.log("Commands:");
       console.log("  setup   - Interactive setup wizard");
@@ -33,7 +40,7 @@ async function main() {
 }
 
 async function setupCommand() {
-  console.log("🚀 Muavin Setup Wizard\n");
+  heading("🚀 Muavin Setup Wizard\n");
 
   // Step 1: Check prerequisites
   if (!await checkPrereqs()) {
@@ -80,7 +87,8 @@ async function setupCommand() {
     await deployCommand();
   }
 
-  console.log("\n✓ Setup complete!");
+  console.log();
+  ok("Setup complete!");
 }
 
 async function parseEnvFile(envPath: string): Promise<Record<string, string>> {
@@ -129,21 +137,21 @@ async function checkExistingTelegram(
     const response = await fetch(`https://api.telegram.org/bot${token}/getMe`);
     const data = await response.json();
     if (!data.ok) {
-      console.log("⚠ Existing Telegram token is invalid, re-configuring...\n");
+      warn("Existing Telegram token is invalid, re-configuring...\n");
       return null;
     }
 
     // Get userId from config
     const userId = existingConfig?.owner?.toString();
     if (!userId || !/^\d+$/.test(userId)) {
-      console.log("⚠ Telegram token valid but user ID missing, re-configuring...\n");
+      warn("Telegram token valid but user ID missing, re-configuring...\n");
       return null;
     }
 
-    console.log(`✓ Telegram already configured (@${data.result.username})\n`);
+    ok(`Telegram already configured (@${data.result.username})\n`);
     return { token, userId };
   } catch {
-    console.log("⚠ Could not validate existing Telegram token, re-configuring...\n");
+    warn("Could not validate existing Telegram token, re-configuring...\n");
     return null;
   }
 }
@@ -164,12 +172,12 @@ async function checkExistingSupabase(
     const { error } = await client.from("messages").select("id").limit(1);
 
     if (error && (error.code === "42P01" || error.message?.includes("not find the table"))) {
-      console.log("⚠ Supabase credentials exist but tables not found, setting up schema...\n");
+      warn("Supabase credentials exist but tables not found, setting up schema...\n");
 
       // Extract project ref from URL
       const match = url.match(/https:\/\/([^.]+)\.supabase\.co/);
       if (!match) {
-        console.log("✗ Could not extract project reference from URL");
+        fail("Could not extract project reference from URL");
         return null;
       }
       const projectRef = match[1];
@@ -185,8 +193,8 @@ async function checkExistingSupabase(
       const sqlEditorUrl = `https://supabase.com/dashboard/project/${projectRef}/sql/new`;
       Bun.spawn(["open", sqlEditorUrl]);
 
-      console.log("✓ Schema SQL copied to clipboard");
-      console.log("✓ Opening SQL Editor in browser");
+      ok("Schema SQL copied to clipboard");
+      ok("Opening SQL Editor in browser");
       console.log("\nJust paste (⌘V) and click Run.\n");
 
       prompt("Press Enter when done...");
@@ -194,62 +202,62 @@ async function checkExistingSupabase(
       // Re-verify
       const { error: retryError } = await client.from("messages").select("id").limit(1);
       if (retryError && (retryError.code === "42P01" || retryError.message?.includes("not find the table"))) {
-        console.log("✗ Tables still not found");
+        fail("Tables still not found");
         return null;
       }
 
-      console.log("✓ Supabase connection verified\n");
+      ok("Supabase connection verified\n");
       return { url, key };
     } else if (error) {
-      console.log("⚠ Supabase credentials exist but connection failed, re-configuring...\n");
+      warn("Supabase credentials exist but connection failed, re-configuring...\n");
       return null;
     }
 
-    console.log("✓ Supabase already configured\n");
+    ok("Supabase already configured\n");
     return { url, key };
   } catch {
-    console.log("⚠ Could not validate existing Supabase credentials, re-configuring...\n");
+    warn("Could not validate existing Supabase credentials, re-configuring...\n");
     return null;
   }
 }
 
 async function checkPrereqs(): Promise<boolean> {
-  console.log("Checking prerequisites...");
+  heading("Checking prerequisites...");
 
   const bunPath = Bun.which("bun");
   if (!bunPath) {
-    console.log("✗ bun not found");
+    fail("bun not found");
     return false;
   }
-  console.log("✓ bun found");
+  ok("bun found");
 
   const claudePath = Bun.which("claude");
   if (!claudePath) {
-    console.log("✗ claude CLI not found");
+    fail("claude CLI not found");
     return false;
   }
-  console.log("✓ claude CLI found");
+  ok("claude CLI found");
 
   const nodeModulesExists = await Bun.file("node_modules/grammy/package.json").exists();
   if (!nodeModulesExists) {
-    console.log("✗ node_modules not found - run: bun install");
+    fail("node_modules not found - run: bun install");
     return false;
   }
-  console.log("✓ node_modules found");
+  ok("node_modules found");
 
   console.log();
   return true;
 }
 
 async function setupTelegram(): Promise<{ token: string; userId: string } | null> {
-  console.log("Setting up Telegram...");
-  console.log("1. Open Telegram and message @BotFather");
-  console.log("2. Send /newbot and follow the prompts");
-  console.log("3. Copy the bot token\n");
+  heading("Setting up Telegram...");
+  dim("1. Open Telegram and message @BotFather");
+  dim("2. Send /newbot and follow the prompts");
+  dim("3. Copy the bot token\n");
 
   const token = prompt("Enter your Telegram bot token: ");
   if (!token) {
-    console.log("✗ No token provided");
+    fail("No token provided");
     return null;
   }
 
@@ -258,44 +266,44 @@ async function setupTelegram(): Promise<{ token: string; userId: string } | null
     const response = await fetch(`https://api.telegram.org/bot${token}/getMe`);
     const data = await response.json();
     if (!data.ok) {
-      console.log("✗ Invalid bot token");
+      fail("Invalid bot token");
       return null;
     }
-    console.log(`✓ Bot validated: @${data.result.username}`);
+    ok(`Bot validated: @${data.result.username}`);
   } catch (error) {
-    console.log("✗ Failed to validate bot token");
+    fail("Failed to validate bot token");
     return null;
   }
 
   console.log("\nTo get your user ID:");
-  console.log("1. Message @userinfobot on Telegram");
-  console.log("2. Copy your ID\n");
+  dim("1. Message @userinfobot on Telegram");
+  dim("2. Copy your ID\n");
 
   const userId = prompt("Enter your Telegram user ID: ");
   if (!userId || !/^\d+$/.test(userId)) {
-    console.log("✗ Invalid user ID (must be numeric)");
+    fail("Invalid user ID (must be numeric)");
     return null;
   }
-  console.log("✓ User ID validated\n");
+  ok("User ID validated\n");
 
   return { token, userId };
 }
 
 async function setupSupabase(): Promise<{ url: string; key: string } | null> {
-  console.log("Setting up Supabase...");
-  console.log("1. Go to your Supabase project dashboard");
-  console.log("2. Settings → API → Project API keys");
-  console.log("3. Copy the 'service_role' key (the secret one, NOT anon)\n");
+  heading("Setting up Supabase...");
+  dim("1. Go to your Supabase project dashboard");
+  dim("2. Settings → API → Project API keys");
+  dim("3. Copy the 'service_role' key (the secret one, NOT anon)\n");
 
   const url = prompt("Enter your Supabase project URL (e.g., https://xxxx.supabase.co): ");
   if (!url) {
-    console.log("✗ No URL provided");
+    fail("No URL provided");
     return null;
   }
 
   const key = prompt("Enter your Supabase service_role key: ");
   if (!key) {
-    console.log("✗ No key provided");
+    fail("No key provided");
     return null;
   }
 
@@ -305,12 +313,13 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
     const { error } = await client.from("messages").select("id").limit(1);
 
     if (error && (error.code === "42P01" || error.message?.includes("not find the table"))) {
-      console.log("\n✗ Tables not found. Setting up schema...");
+      console.log();
+      fail("Tables not found. Setting up schema...");
 
       // Extract project ref from URL
       const match = url.match(/https:\/\/([^.]+)\.supabase\.co/);
       if (!match) {
-        console.log("✗ Could not extract project reference from URL");
+        fail("Could not extract project reference from URL");
         return null;
       }
       const projectRef = match[1];
@@ -326,8 +335,9 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
       const sqlEditorUrl = `https://supabase.com/dashboard/project/${projectRef}/sql/new`;
       Bun.spawn(["open", sqlEditorUrl]);
 
-      console.log("\n✓ Schema SQL copied to clipboard");
-      console.log("✓ Opening SQL Editor in browser");
+      console.log();
+      ok("Schema SQL copied to clipboard");
+      ok("Opening SQL Editor in browser");
       console.log("\nJust paste (⌘V) and click Run.\n");
 
       prompt("Press Enter when done...");
@@ -335,24 +345,24 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
       // Re-verify
       const { error: retryError } = await client.from("messages").select("id").limit(1);
       if (retryError && (retryError.code === "42P01" || retryError.message?.includes("not find the table"))) {
-        console.log("✗ Tables still not found");
+        fail("Tables still not found");
         return null;
       }
     } else if (error) {
-      console.log(`✗ Supabase connection error: ${error.message}`);
+      fail(`Supabase connection error: ${error.message}`);
       return null;
     }
 
-    console.log("✓ Supabase connection verified\n");
+    ok("Supabase connection verified\n");
     return { url, key };
   } catch (error) {
-    console.log("✗ Failed to connect to Supabase");
+    fail("Failed to connect to Supabase");
     return null;
   }
 }
 
 async function verifyAll(): Promise<boolean> {
-  console.log("Verifying services...");
+  heading("Verifying services...");
 
   // Test OpenAI embeddings
   try {
@@ -361,9 +371,9 @@ async function verifyAll(): Promise<boolean> {
       model: "text-embedding-3-small",
       input: "test",
     });
-    console.log("✓ OpenAI API verified");
+    ok("OpenAI API verified");
   } catch (error) {
-    console.log("✗ OpenAI API failed");
+    fail("OpenAI API failed");
     return false;
   }
 
@@ -372,13 +382,13 @@ async function verifyAll(): Promise<boolean> {
     const proc = Bun.spawn(["claude", "--version"]);
     await proc.exited;
     if (proc.exitCode === 0) {
-      console.log("✓ Claude CLI verified");
+      ok("Claude CLI verified");
     } else {
-      console.log("✗ Claude CLI failed");
+      fail("Claude CLI failed");
       return false;
     }
   } catch (error) {
-    console.log("✗ Claude CLI failed");
+    fail("Claude CLI failed");
     return false;
   }
 
@@ -426,7 +436,7 @@ async function updateEnvFile(
   });
 
   await Bun.write(envPath, updatedLines.join("\n"));
-  console.log("✓ .env file updated");
+  ok(".env file updated");
 }
 
 async function updateMuavinConfig(userId: string) {
@@ -440,7 +450,7 @@ async function updateMuavinConfig(userId: string) {
   // Copy config.example.json to ~/.muavin/config.json
   const example = await Bun.file(examplePath).text();
   await Bun.write(configPath, example);
-  console.log("✓ Created config.json from config.example.json");
+  ok("Created config.json from config.example.json");
 
   const config = JSON.parse(await Bun.file(configPath).text());
   const uid = Number(userId);
@@ -449,7 +459,7 @@ async function updateMuavinConfig(userId: string) {
   if (!config.allowUsers.includes(uid)) config.allowUsers.push(uid);
   if (!Array.isArray(config.allowGroups)) config.allowGroups = [];
   await Bun.write(configPath, JSON.stringify(config, null, 2) + "\n");
-  console.log("✓ config.json updated (owner + allowUsers)");
+  ok("config.json updated (owner + allowUsers)");
 }
 
 async function copyCLAUDEmd() {
@@ -459,88 +469,115 @@ async function copyCLAUDEmd() {
 
   // Only copy if it doesn't already exist
   if (await Bun.file(destPath).exists()) {
-    console.log("✓ CLAUDE.md already exists");
+    ok("CLAUDE.md already exists");
     return;
   }
 
   const examplePath = `${import.meta.dir}/../CLAUDE.example.md`;
   const example = await Bun.file(examplePath).text();
   await Bun.write(destPath, example);
-  console.log("✓ Created CLAUDE.md from CLAUDE.example.md");
+  ok("Created CLAUDE.md from CLAUDE.example.md");
 }
 
 async function deployCommand() {
-  console.log("Deploying launch daemons...\n");
+  heading("Building and deploying...\n");
 
-  // Get UID
+  const homeDir = process.env.HOME!;
+  const repoRoot = resolve(import.meta.dir, "..");
+  const distDir = `${repoRoot}/dist`;
+  const muavinBinDir = `${homeDir}/.muavin/bin`;
+
+  // Build compiled binaries
+  heading("Building binaries...");
+  await mkdir(distDir, { recursive: true });
+
+  const binaries = [
+    { src: "src/relay.ts", out: "muavin-relay", id: "com.muavin.relay" },
+    { src: "src/cron.ts", out: "muavin-cron", id: "com.muavin.cron" },
+    { src: "src/heartbeat.ts", out: "muavin-heartbeat", id: "com.muavin.heartbeat" },
+  ];
+
+  for (const bin of binaries) {
+    const buildProc = Bun.spawn([
+      "bun", "build", "--compile", `${repoRoot}/${bin.src}`, "--outfile", `${distDir}/${bin.out}`,
+    ], { stdout: "pipe", stderr: "pipe" });
+    await buildProc.exited;
+
+    if (buildProc.exitCode !== 0) {
+      const stderr = await new Response(buildProc.stderr).text();
+      fail(`Build failed for ${bin.out}: ${stderr}`);
+      return;
+    }
+    ok(`Built ${bin.out}`);
+
+    const signProc = Bun.spawn([
+      "codesign", "--force", "--sign", "-", "--identifier", bin.id, `${distDir}/${bin.out}`,
+    ], { stdout: "pipe", stderr: "pipe" });
+    await signProc.exited;
+
+    if (signProc.exitCode !== 0) {
+      const stderr = await new Response(signProc.stderr).text();
+      fail(`Codesign failed for ${bin.out}: ${stderr}`);
+      return;
+    }
+    ok(`Signed ${bin.out} (${bin.id})`);
+  }
+
+  // Copy to ~/.muavin/bin/
+  console.log();
+  heading("Installing binaries...");
+  await mkdir(muavinBinDir, { recursive: true });
+
+  for (const bin of binaries) {
+    const cpProc = Bun.spawn(["cp", `${distDir}/${bin.out}`, `${muavinBinDir}/${bin.out}`]);
+    await cpProc.exited;
+    await Bun.spawn(["chmod", "+x", `${muavinBinDir}/${bin.out}`]).exited;
+    ok(`Installed ${bin.out}`);
+  }
+
+  // Deploy launch daemons
+  console.log();
+  heading("Deploying launch daemons...");
+
   const uidProc = Bun.spawn(["id", "-u"]);
   const uid = (await new Response(uidProc.stdout).text()).trim();
 
   const plists = [
     { file: "com.muavin.relay.plist", label: "com.muavin.relay" },
     { file: "com.muavin.cron.plist", label: "com.muavin.cron" },
+    { file: "com.muavin.heartbeat.plist", label: "com.muavin.heartbeat" },
   ];
 
-  const homeDir = process.env.HOME!;
   const launchAgentsDir = `${homeDir}/Library/LaunchAgents`;
-  const bunPath = Bun.which("bun")!;
-  const repoRoot = resolve(import.meta.dir, "..");
 
   for (const { file, label } of plists) {
-    const sourcePath = `${import.meta.dir}/../daemon/${file}`;
+    const sourcePath = `${repoRoot}/daemon/${file}`;
     const destPath = `${launchAgentsDir}/${file}`;
 
-    // Read plist template and replace placeholders
     let plistContent = await Bun.file(sourcePath).text();
     plistContent = plistContent
-      .replace(/__BUN_PATH__/g, bunPath)
-      .replace(/__REPO_PATH__/g, repoRoot)
+      .replace(/__MUAVIN_BIN__/g, muavinBinDir)
       .replace(/__HOME__/g, homeDir);
 
     await Bun.write(destPath, plistContent);
-    console.log(`✓ Copied ${file}`);
+    ok(`Copied ${file}`);
 
-    // Bootout (ignore errors)
     await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`]).exited;
 
-    // Bootstrap
     const bootstrapProc = Bun.spawn([
-      "launchctl",
-      "bootstrap",
-      `gui/${uid}`,
-      destPath,
+      "launchctl", "bootstrap", `gui/${uid}`, destPath,
     ]);
     await bootstrapProc.exited;
 
     if (bootstrapProc.exitCode === 0) {
-      console.log(`✓ Loaded ${label}`);
+      ok(`Loaded ${label}`);
     } else {
-      console.log(`✗ Failed to load ${label}`);
+      fail(`Failed to load ${label}`);
     }
   }
 
-  console.log("\nVerifying deployment...");
-  const listProc = Bun.spawn(["launchctl", "list"], {
-    stdout: "pipe",
-  });
-  const output = await new Response(listProc.stdout).text();
-  const muavinServices = output
-    .split("\n")
-    .filter((line) => line.includes("muavin"));
-
-  if (muavinServices.length > 0) {
-    console.log("✓ Active services:");
-    muavinServices.forEach((line) => console.log(`  ${line}`));
-  } else {
-    console.log("✗ No muavin services found");
-  }
-}
-
-async function statusCommand() {
-  console.log("Muavin Status\n");
-
-  // Check daemons
-  console.log("Daemons:");
+  console.log();
+  heading("Verifying deployment...");
   const listProc = Bun.spawn(["launchctl", "list"], { stdout: "pipe" });
   const output = await new Response(listProc.stdout).text();
   const muavinServices = output
@@ -548,13 +585,33 @@ async function statusCommand() {
     .filter((line) => line.includes("muavin"));
 
   if (muavinServices.length > 0) {
-    muavinServices.forEach((line) => console.log(`  ${line}`));
+    ok("Active services:");
+    muavinServices.forEach((line) => console.log(pc.dim(`  ${line}`)));
   } else {
-    console.log("  No muavin services running");
+    fail("No muavin services found");
+  }
+}
+
+async function statusCommand() {
+  heading("Muavin Status\n");
+
+  // Check daemons
+  heading("Daemons:");
+  const listProc = Bun.spawn(["launchctl", "list"], { stdout: "pipe" });
+  const output = await new Response(listProc.stdout).text();
+  const muavinServices = output
+    .split("\n")
+    .filter((line) => line.includes("muavin"));
+
+  if (muavinServices.length > 0) {
+    muavinServices.forEach((line) => console.log(pc.dim(`  ${line}`)));
+  } else {
+    dim("  No muavin services running");
   }
 
   // Check sessions
-  console.log("\nSessions:");
+  console.log();
+  heading("Sessions:");
   const sessionsPath = `${process.env.HOME}/.muavin/sessions.json`;
   try {
     const sessionsFile = Bun.file(sessionsPath);
@@ -562,17 +619,18 @@ async function statusCommand() {
       const sessions = await sessionsFile.json();
       for (const [chatId, session] of Object.entries(sessions) as [string, any][]) {
         const sessionId = session.sessionId ? session.sessionId.slice(0, 8) + "..." : "none";
-        console.log(`  Chat ${chatId}: ${sessionId} (${session.updatedAt ?? "unknown"})`);
+        console.log(pc.dim(`  Chat ${chatId}: ${sessionId} (${session.updatedAt ?? "unknown"})`));
       }
     } else {
-      console.log("  No sessions file");
+      dim("  No sessions file");
     }
   } catch {
-    console.log("  Error reading sessions");
+    console.error(pc.dim("  Error reading sessions"));
   }
 
   // Check cron state
-  console.log("\nCron:");
+  console.log();
+  heading("Cron:");
   const cronStatePath = `${process.env.HOME}/.muavin/cron-state.json`;
   try {
     const cronFile = Bun.file(cronStatePath);
@@ -580,47 +638,66 @@ async function statusCommand() {
       const cronState = await cronFile.json();
       for (const [jobId, timestamp] of Object.entries(cronState)) {
         const date = typeof timestamp === "number" ? new Date(timestamp as number).toLocaleString() : "never";
-        console.log(`  ${jobId}: ${date}`);
+        console.log(pc.dim(`  ${jobId}: ${date}`));
       }
     } else {
-      console.log("  No cron state file");
+      dim("  No cron state file");
     }
   } catch {
-    console.log("  Error reading cron state");
+    console.error(pc.dim("  Error reading cron state"));
+  }
+
+  // Check heartbeat
+  console.log();
+  heading("Heartbeat:");
+  const heartbeatStatePath = `${process.env.HOME}/.muavin/heartbeat-state.json`;
+  try {
+    const heartbeatFile = Bun.file(heartbeatStatePath);
+    if (await heartbeatFile.exists()) {
+      const hbState = await heartbeatFile.json();
+      const lastRun = hbState.lastRun ? new Date(hbState.lastRun).toLocaleString() : "never";
+      const lastAlert = hbState.lastAlertAt ? new Date(hbState.lastAlertAt).toLocaleString() : "none";
+      console.log(pc.dim(`  Last run: ${lastRun}`));
+      console.log(pc.dim(`  Last alert: ${lastAlert}`));
+    } else {
+      dim("  No heartbeat state file");
+    }
+  } catch {
+    console.error(pc.dim("  Error reading heartbeat state"));
   }
 }
 
 async function testCommand() {
-  console.log("Running smoke tests...\n");
+  heading("Running smoke tests...\n");
 
   // Test memory
-  console.log("Testing memory...");
+  heading("Testing memory...");
   try {
     const { logMessage, searchContext, supabase } = await import("./memory");
     await logMessage("user", "cli-test", "test");
     const results = await searchContext("cli-test");
     if (results.length > 0) {
-      console.log("✓ Memory round-trip successful");
+      ok("Memory round-trip successful");
     } else {
-      console.log("✗ Memory search returned no results");
+      fail("Memory search returned no results");
     }
     await supabase.from("messages").delete().eq("chat_id", "test").eq("content", "cli-test");
   } catch (error) {
-    console.log(`✗ Memory test failed: ${error}`);
+    fail(`Memory test failed: ${error}`);
   }
 
   // Test Telegram
-  console.log("Testing Telegram...");
+  heading("Testing Telegram...");
   try {
     const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN!);
     const me = await bot.api.getMe();
-    console.log(`✓ Telegram bot: @${me.username}`);
+    ok(`Telegram bot: @${me.username}`);
   } catch (error) {
-    console.log(`✗ Telegram test failed: ${error}`);
+    fail(`Telegram test failed: ${error}`);
   }
 
   // Test cron config
-  console.log("Testing cron config...");
+  heading("Testing cron config...");
   try {
     const cronFile = Bun.file(`${process.env.HOME}/.muavin/config.json`);
     const config = await cronFile.json();
@@ -628,12 +705,12 @@ async function testCommand() {
       Array.isArray(config.cron) &&
       config.cron.every((job: any) => job.id && job.intervalMinutes)
     ) {
-      console.log(`✓ Cron config valid (${config.cron.length} jobs)`);
+      ok(`Cron config valid (${config.cron.length} jobs)`);
     } else {
-      console.log("✗ Cron config invalid");
+      fail("Cron config invalid");
     }
   } catch (error) {
-    console.log(`✗ Cron test failed: ${error}`);
+    fail(`Cron test failed: ${error}`);
   }
 }
 

@@ -8,3 +8,18 @@ try {
     if (m) process.env[m[1]] = m[2];
   }
 } catch {}
+
+export function validateEnv(): void {
+  const required = [
+    "TELEGRAM_BOT_TOKEN",
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_KEY",
+    "OPENAI_API_KEY",
+  ];
+  const missing = required.filter((k) => !process.env[k]);
+  if (missing.length > 0) {
+    console.error(`Missing required env vars: ${missing.join(", ")}`);
+    console.error("Check ~/.muavin/.env");
+    process.exit(1);
+  }
+}

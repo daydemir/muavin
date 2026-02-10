@@ -303,7 +303,7 @@ export async function syncMemoryMd(projectDir: string): Promise<number> {
 
       if (existing && existing.length > 0) continue;
 
-      const embedding = await embed(entry).catch(() => null);
+      const embedding = await embed(entry).catch((e) => { console.error("syncMemoryMd embed failed:", e); return null; });
       await supabase.from("memory").insert({
         type: "personal_fact",
         content: entry,
@@ -444,7 +444,7 @@ Output JSON only:
   if (healthResult.merge && healthResult.merge.length > 0) {
     for (const item of healthResult.merge) {
       // Insert merged entry
-      const embedding = await embed(item.merged).catch(() => null);
+      const embedding = await embed(item.merged).catch((e) => { console.error("health check merge embed failed:", e); return null; });
       await supabase.from("memory").insert({
         type: "personal_fact",
         content: item.merged,

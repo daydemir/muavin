@@ -1,9 +1,11 @@
-import "./env";
+import { validateEnv } from "./env";
 import { Bot, type Context } from "grammy";
 import { writeFile, readFile, unlink, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { logMessage, searchContext } from "./memory";
+
+validateEnv();
 
 // ── Config ──────────────────────────────────────────────────
 
