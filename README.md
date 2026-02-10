@@ -1,8 +1,9 @@
-                  
+<pre>
   _ __ ___  _   _  __ _ __  _(_)_ __
  | '_ ` _ \| | | |/ _` \ \ / / | '_ \
  | | | | | | |_| | (_| |\ V /| | | | |
  |_| |_| |_|\__,_|\__,_| \_/ |_|_| |_|
+</pre>
 
 
 A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram.
