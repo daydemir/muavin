@@ -593,7 +593,7 @@ async function testCommand() {
   // Test memory
   console.log("Testing memory...");
   try {
-    const { logMessage, searchContext } = await import("./memory");
+    const { logMessage, searchContext, supabase } = await import("./memory");
     await logMessage("user", "cli-test", "test");
     const results = await searchContext("cli-test");
     if (results.length > 0) {
@@ -601,6 +601,7 @@ async function testCommand() {
     } else {
       console.log("✗ Memory search returned no results");
     }
+    await supabase.from("messages").delete().eq("chat_id", "test").eq("content", "cli-test");
   } catch (error) {
     console.log(`✗ Memory test failed: ${error}`);
   }

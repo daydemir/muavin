@@ -5,7 +5,7 @@ import { join } from "path";
 import { createHash } from "crypto";
 import { callClaude } from "./claude";
 
-const supabase = createClient(
+export const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!,
 );
