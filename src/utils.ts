@@ -1,7 +1,8 @@
 import { readFile, writeFile, unlink, rename } from "fs/promises";
 import { join } from "path";
+import { homedir } from "os";
 
-export const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
+export const MUAVIN_DIR = join(homedir(), ".muavin");
 
 export interface Config {
   owner: number;
@@ -32,9 +33,10 @@ export async function acquireLock(name: string): Promise<boolean> {
         await unlink(lockFile);
       }
     }
-    await writeFile(lockFile, process.pid.toString());
+    await writeFile(lockFile, process.pid.toString(), { flag: "wx" });
     return true;
-  } catch {
+  } catch (err: any) {
+    if (err?.code === "EEXIST") return false;
     return false;
   }
 }

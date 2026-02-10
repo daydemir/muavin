@@ -3,12 +3,13 @@ import OpenAI from "openai";
 import { readFile, mkdir } from "fs/promises";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 import { callClaude } from "./claude";
 import { sendTelegram } from "./telegram";
 import { loadConfig } from "./utils";
 
-const SYSTEM_CWD = join(process.env.HOME ?? "~", ".muavin", "system");
-const PROMPTS_DIR = join(process.env.HOME ?? "~", ".muavin", "prompts");
+const SYSTEM_CWD = join(homedir(), ".muavin", "system");
+const PROMPTS_DIR = join(homedir(), ".muavin", "prompts");
 
 function extractJSON(text: string): string {
   const match = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
@@ -27,7 +28,7 @@ export const supabase = createClient(
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
+const MUAVIN_DIR = join(homedir(), ".muavin");
 
 export async function embed(text: string): Promise<number[]> {
   const res = await openai.embeddings.create({
@@ -223,11 +224,16 @@ interface HealthCheckResult {
 
 export async function runHealthCheck(): Promise<void> {
   // Fetch all non-stale memories
-  const { data: memories } = await supabase
+  const { data: memories, error } = await supabase
     .from("memory")
     .select("id, type, content, created_at")
     .eq("stale", false)
     .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("runHealthCheck query error:", error);
+    return;
+  }
 
   if (!memories || memories.length === 0) {
     console.log("No memories to check");

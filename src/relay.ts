@@ -192,7 +192,7 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
       const numericChatId = ctx.chat?.id ?? 0;
       const appendSystemPrompt = await buildContext({
         query: prompt,
-        chatId: String(numericChatId),
+        chatId: numericChatId,
         recentCount: config.recentMessageCount ?? 10,
       });
 

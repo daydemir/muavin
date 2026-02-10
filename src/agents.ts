@@ -187,7 +187,7 @@ export async function getJobsSummary(): Promise<string> {
 
 export async function buildContext(opts: {
   query: string;
-  chatId?: string;
+  chatId?: number;
   recentCount?: number;
 }): Promise<string> {
   const parts: string[] = [];
@@ -211,7 +211,7 @@ export async function buildContext(opts: {
   // 3. Recent messages (if chatId provided)
   if (opts.chatId && opts.recentCount) {
     const { getRecentMessages } = await import("./memory");
-    const recent = await getRecentMessages(opts.chatId, opts.recentCount).catch(() => []);
+    const recent = await getRecentMessages(String(opts.chatId), opts.recentCount).catch(() => []);
     if (recent.length > 0) {
       const recentStr = recent
         .map((m) => `${m.role}: ${m.content}`)

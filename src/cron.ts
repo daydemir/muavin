@@ -46,7 +46,13 @@ const now = new Date();
 
 for (const job of jobs) {
   const lastRun = state[job.id] ?? 0;
-  const cron = new Cron(job.schedule);
+  let cron: Cron;
+  try {
+    cron = new Cron(job.schedule);
+  } catch (err) {
+    console.error(`${job.id}: invalid schedule "${job.schedule}":`, err);
+    continue;
+  }
   const nextAfterLast = cron.nextRun(new Date(lastRun));
 
   if (!nextAfterLast || nextAfterLast > now) {

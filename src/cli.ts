@@ -638,23 +638,35 @@ async function installTemplates() {
   // Install CLAUDE.md (only if not exists — don't overwrite personality)
   const claudePath = `${muavinDir}/CLAUDE.md`;
   if (!(await Bun.file(claudePath).exists())) {
-    const content = await Bun.file(`${templatesDir}/CLAUDE.md`).text();
-    await Bun.write(claudePath, content);
-    ok("Created CLAUDE.md");
+    try {
+      const content = await Bun.file(`${templatesDir}/CLAUDE.md`).text();
+      await Bun.write(claudePath, content);
+      ok("Created CLAUDE.md");
+    } catch {
+      fail("Could not read templates/CLAUDE.md");
+    }
   } else {
     ok("CLAUDE.md already exists");
   }
 
   // Install muavin.md (always overwrite — identity file)
-  const muavinMdContent = await Bun.file(`${templatesDir}/muavin.md`).text();
-  await Bun.write(`${muavinDir}/muavin.md`, muavinMdContent);
-  ok("Installed muavin.md");
+  try {
+    const muavinMdContent = await Bun.file(`${templatesDir}/muavin.md`).text();
+    await Bun.write(`${muavinDir}/muavin.md`, muavinMdContent);
+    ok("Installed muavin.md");
+  } catch {
+    fail("Could not read templates/muavin.md");
+  }
 
   // Install docs (always overwrite)
   const docFiles = ["behavior.md", "jobs.md", "agents.md", "skills.md"];
   for (const doc of docFiles) {
-    const content = await Bun.file(`${templatesDir}/docs/${doc}`).text();
-    await Bun.write(`${docsDir}/${doc}`, content);
+    try {
+      const content = await Bun.file(`${templatesDir}/docs/${doc}`).text();
+      await Bun.write(`${docsDir}/${doc}`, content);
+    } catch {
+      fail(`Could not read templates/docs/${doc}`);
+    }
   }
   ok(`Installed docs/ (${docFiles.length} files)`);
 
@@ -1189,9 +1201,13 @@ async function statusCommand() {
         const enabledStr = !job.enabled ? pc.yellow("[off]") : job.system ? pc.cyan("[sys]") : pc.green("[on] ");
         let nextStr = "—";
         if (job.enabled) {
-          const cron = new Cron(job.schedule);
-          const nextRun = cron.nextRun();
-          nextStr = nextRun ? timeUntil(nextRun.getTime()) : "—";
+          try {
+            const cron = new Cron(job.schedule);
+            const nextRun = cron.nextRun();
+            nextStr = nextRun ? timeUntil(nextRun.getTime()) : "—";
+          } catch {
+            nextStr = pc.red("invalid schedule");
+          }
         }
         const name = (job.name || job.id).padEnd(20);
         const scheduleStr = job.schedule.padEnd(18);
