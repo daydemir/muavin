@@ -7,6 +7,10 @@ import { logMessage, searchContext } from "./memory";
 
 validateEnv();
 
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection:", err);
+});
+
 // ── Config ──────────────────────────────────────────────────
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
@@ -128,6 +132,11 @@ const bot = new Bot(BOT_TOKEN);
 // Cache bot info for group mention detection
 const botInfo = await bot.api.getMe();
 const botUsername = botInfo.username ?? "";
+
+bot.catch((err) => {
+  console.error("Bot error:", err.message);
+  err.ctx.reply("Something went wrong. Try again.").catch(() => {});
+});
 
 // Auth middleware
 bot.use(async (ctx, next) => {
@@ -356,4 +365,8 @@ console.log(`Allowed groups: ${[...allowGroups].join(", ")}`);
 
 bot.start({
   onStart: () => console.log("Muavin is running!"),
+}).catch((err) => {
+  console.error("bot.start() fatal:", err);
+  unlink(LOCK_FILE).catch(() => {});
+  process.exit(1);
 });

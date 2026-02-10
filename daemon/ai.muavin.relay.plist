@@ -4,10 +4,10 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.muavin.heartbeat</string>
+    <string>ai.muavin.relay</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__MUAVIN_BIN__/muavin-heartbeat</string>
+        <string>__MUAVIN_BIN__/muavin-relay</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__HOME__/.muavin</string>
@@ -18,11 +18,15 @@
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
-    <key>StartInterval</key>
-    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    __RUN_AT_LOAD__
+    <key>KeepAlive</key>
+    <true/>
     <key>StandardOutPath</key>
-    <string>__HOME__/Library/Logs/muavin-heartbeat.log</string>
+    <string>__HOME__/Library/Logs/muavin-relay.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/Library/Logs/muavin-heartbeat.error.log</string>
+    <string>__HOME__/Library/Logs/muavin-relay.error.log</string>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
 </dict>
 </plist>

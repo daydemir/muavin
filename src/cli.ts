@@ -30,6 +30,9 @@ async function main() {
     case "config":
       await configCommand();
       break;
+    case "stop":
+      await stopCommand();
+      break;
     default:
       heading("Muavin CLI\n");
       console.log("Usage: bun muavin <command>\n");
@@ -37,6 +40,7 @@ async function main() {
       console.log("  setup   - Interactive setup wizard");
       console.log("  config  - Edit configuration");
       console.log("  start   - Deploy launch daemons");
+      console.log("  stop    - Stop all daemons");
       console.log("  status  - Check daemon and session status");
       console.log("  test    - Run smoke tests");
       process.exit(0);
@@ -624,6 +628,7 @@ async function configCommand() {
     { key: "GROK_API_KEY", label: "Grok API key", source: "env" },
     { key: "GEMINI_API_KEY", label: "Gemini API key", source: "env" },
     { key: "claudeTimeoutMs", label: "Claude timeout (ms)", source: "config" },
+    { key: "startOnLogin", label: "Start on login", source: "config" },
   ];
 
   while (true) {
@@ -637,7 +642,8 @@ async function configCommand() {
       } else {
         value = env[f.key] ?? "";
       }
-      const display = value ? maskValue(value) : pc.dim("(not set)");
+      const isBool = typeof config?.[f.key] === "boolean";
+      const display = value ? (isBool ? value : maskValue(value)) : pc.dim("(not set)");
       console.log(`  ${i + 1}. ${f.label.padEnd(22)} ${display}`);
     }
 
@@ -699,6 +705,9 @@ async function configCommand() {
         const ms = Number(newValue);
         if (isNaN(ms) || ms <= 0) { fail("Must be a positive number"); continue; }
         currentConfig.claudeTimeoutMs = ms;
+      } else if (field.key === "startOnLogin") {
+        if (newValue !== "true" && newValue !== "false") { fail("Must be true or false"); continue; }
+        currentConfig.startOnLogin = newValue === "true";
       } else {
         currentConfig[field.key] = newValue;
       }
@@ -711,6 +720,44 @@ async function configCommand() {
 
     ok(`${field.label} updated`);
   }
+}
+
+async function stopCommand() {
+  heading("Stopping Muavin daemons...\n");
+
+  const uidProc = Bun.spawn(["id", "-u"], { stdout: "pipe" });
+  const uid = (await new Response(uidProc.stdout).text()).trim();
+
+  const labels = ["ai.muavin.relay", "ai.muavin.cron", "ai.muavin.heartbeat"];
+
+  for (const label of labels) {
+    const proc = Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await proc.exited;
+
+    if (proc.exitCode === 0) {
+      ok(`Stopped ${label}`);
+    } else if (proc.exitCode === 3) {
+      dim(`  ${label} not loaded`);
+    } else {
+      dim(`  ${label} not loaded`);
+    }
+  }
+
+  // Clean up lock file
+  const lockPath = `${process.env.HOME}/.muavin/relay.lock`;
+  try {
+    const { unlink } = await import("fs/promises");
+    await unlink(lockPath);
+    ok("Removed relay.lock");
+  } catch {
+    // Lock file doesn't exist, that's fine
+  }
+
+  console.log();
+  ok("All daemons stopped.");
 }
 
 async function deployCommand() {
@@ -728,6 +775,8 @@ async function deployCommand() {
     return;
   }
 
+  const config = await parseConfigFile(`${homeDir}/.muavin/config.json`) ?? {};
+
   const repoRoot = resolve(import.meta.dir, "..");
   const distDir = `${repoRoot}/dist`;
   const muavinBinDir = `${homeDir}/.muavin/bin`;
@@ -737,9 +786,9 @@ async function deployCommand() {
   await mkdir(distDir, { recursive: true });
 
   const binaries = [
-    { src: "src/relay.ts", out: "muavin-relay", id: "com.muavin.relay" },
-    { src: "src/cron.ts", out: "muavin-cron", id: "com.muavin.cron" },
-    { src: "src/heartbeat.ts", out: "muavin-heartbeat", id: "com.muavin.heartbeat" },
+    { src: "src/relay.ts", out: "muavin-relay", id: "ai.muavin.relay" },
+    { src: "src/cron.ts", out: "muavin-cron", id: "ai.muavin.cron" },
+    { src: "src/heartbeat.ts", out: "muavin-heartbeat", id: "ai.muavin.heartbeat" },
   ];
 
   for (const bin of binaries) {
@@ -788,9 +837,9 @@ async function deployCommand() {
   const uid = (await new Response(uidProc.stdout).text()).trim();
 
   const plists = [
-    { file: "com.muavin.relay.plist", label: "com.muavin.relay" },
-    { file: "com.muavin.cron.plist", label: "com.muavin.cron" },
-    { file: "com.muavin.heartbeat.plist", label: "com.muavin.heartbeat" },
+    { file: "ai.muavin.relay.plist", label: "ai.muavin.relay" },
+    { file: "ai.muavin.cron.plist", label: "ai.muavin.cron" },
+    { file: "ai.muavin.heartbeat.plist", label: "ai.muavin.heartbeat" },
   ];
 
   const launchAgentsDir = `${homeDir}/Library/LaunchAgents`;
@@ -800,9 +849,11 @@ async function deployCommand() {
     const destPath = `${launchAgentsDir}/${file}`;
 
     let plistContent = await Bun.file(sourcePath).text();
+    const startOnLogin = config.startOnLogin !== false;
     plistContent = plistContent
       .replace(/__MUAVIN_BIN__/g, muavinBinDir)
-      .replace(/__HOME__/g, homeDir);
+      .replace(/__HOME__/g, homeDir)
+      .replace(/__RUN_AT_LOAD__/g, startOnLogin ? "<true/>" : "<false/>");
 
     await Bun.write(destPath, plistContent);
     ok(`Copied ${file}`);

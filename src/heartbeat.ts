@@ -39,7 +39,7 @@ async function checkRelayDaemon(): Promise<string | null> {
   const proc = Bun.spawn(["launchctl", "list"], { stdout: "pipe", stderr: "pipe" });
   const output = await new Response(proc.stdout).text();
   await proc.exited;
-  const relayLine = output.split("\n").find(l => l.includes("com.muavin.relay"));
+  const relayLine = output.split("\n").find(l => l.includes("ai.muavin.relay"));
   if (!relayLine) return "Relay daemon not running";
   const parts = relayLine.trim().split(/\s+/);
   if (parts[0] === "-" && parts[1] !== "0") {

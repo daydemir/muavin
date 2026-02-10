@@ -4,6 +4,7 @@
   "allowGroups": [],
   "model": "opus",
   "claudeTimeoutMs": 43200000,
+  "startOnLogin": true,
   "cron": [
     {
       "id": "memory-sync",

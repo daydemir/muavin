@@ -4,10 +4,10 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.muavin.cron</string>
+    <string>ai.muavin.heartbeat</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__MUAVIN_BIN__/muavin-cron</string>
+        <string>__MUAVIN_BIN__/muavin-heartbeat</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__HOME__/.muavin</string>
@@ -19,10 +19,10 @@
         <string>__HOME__</string>
     </dict>
     <key>StartInterval</key>
-    <integer>900</integer>
+    <integer>1800</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/Library/Logs/muavin-cron.log</string>
+    <string>__HOME__/Library/Logs/muavin-heartbeat.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/Library/Logs/muavin-cron.error.log</string>
+    <string>__HOME__/Library/Logs/muavin-heartbeat.error.log</string>
 </dict>
 </plist>
