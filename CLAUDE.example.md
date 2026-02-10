@@ -45,6 +45,8 @@ If something seems broken, check the error logs first.
 - OpenAI: Used for embeddings and available for other OpenAI calls (required)
 - Grok (xAI): If configured in ~/.muavin/.env, use for tasks where Grok is appropriate
 - Gemini (Google): If configured in ~/.muavin/.env, use for tasks where Gemini is appropriate
+- OpenRouter: If configured in ~/.muavin/.env, available as an alternative model provider. Use when you need access to models not available through other providers.
+- Brave Search: If configured in ~/.muavin/.env, available for web search queries.
 
 <behavior>
 

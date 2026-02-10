@@ -102,18 +102,37 @@ async function setupCommand() {
   }
   process.env.OPENAI_API_KEY = openaiKey;
 
-  // Step 5: Optional API keys
+  // Step 5: Setup Anthropic (or skip if already configured)
+  let anthropicKey = existingEnv.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
+  if (anthropicKey) {
+    ok("Anthropic already configured\n");
+  } else {
+    heading("Setting up Anthropic...");
+    dim("1. Go to https://console.anthropic.com/settings/keys");
+    dim("2. Create a new API key");
+    dim("3. Copy the key\n");
+
+    const key = prompt("Enter your Anthropic API key (press Enter to skip): ");
+    if (key) {
+      await updateEnvFile({ ANTHROPIC_API_KEY: key });
+      ok("Anthropic key saved\n");
+    } else {
+      warn("Skipped — Claude Code requires ANTHROPIC_API_KEY to function\n");
+    }
+  }
+
+  // Step 6: Optional API keys
   await setupOptionalKeys(existingEnv);
 
-  // Step 6: Verify all services
+  // Step 7: Verify all services
   if (!await verifyAll()) {
     return;
   }
 
-  // Step 7: Finalize
+  // Step 8: Finalize
   await copyCLAUDEmd();
 
-  // Step 8: Offer deploy
+  // Step 9: Offer deploy
   const shouldStart = prompt("Start daemons now? (y/n): ");
   if (shouldStart?.toLowerCase() === "y") {
     await deployCommand();
@@ -393,8 +412,10 @@ async function setupOpenAI(): Promise<string | null> {
 
 async function setupOptionalKeys(existingEnv: Record<string, string>) {
   const optionalKeys = [
-    { envVar: "GROK_API_KEY", name: "Grok (xAI)" },
+    { envVar: "XAI_API_KEY", name: "Grok (xAI)" },
     { envVar: "GEMINI_API_KEY", name: "Gemini (Google)" },
+    { envVar: "OPENROUTER_API_KEY", name: "OpenRouter" },
+    { envVar: "BRAVE_API_KEY", name: "Brave Search" },
   ];
 
   for (const { envVar, name } of optionalKeys) {
@@ -625,8 +646,11 @@ async function configCommand() {
     { key: "SUPABASE_URL", label: "Supabase URL", source: "env" },
     { key: "SUPABASE_SERVICE_KEY", label: "Supabase service key", source: "env" },
     { key: "OPENAI_API_KEY", label: "OpenAI API key", source: "env" },
-    { key: "GROK_API_KEY", label: "Grok API key", source: "env" },
+    { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", source: "env" },
+    { key: "XAI_API_KEY", label: "Grok (xAI) API key", source: "env" },
     { key: "GEMINI_API_KEY", label: "Gemini API key", source: "env" },
+    { key: "OPENROUTER_API_KEY", label: "OpenRouter API key", source: "env" },
+    { key: "BRAVE_API_KEY", label: "Brave Search API key", source: "env" },
     { key: "claudeTimeoutMs", label: "Claude timeout (ms)", source: "config" },
     { key: "startOnLogin", label: "Start on login", source: "config" },
   ];
