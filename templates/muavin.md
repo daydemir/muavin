@@ -52,11 +52,12 @@ Common self-service operations:
 
 ## API Keys
 
-- OpenAI: Used for embeddings (required)
-- Grok (xAI): If configured in `~/.muavin/.env`, use for tasks where Grok is appropriate
-- Gemini (Google): If configured, use for tasks where Gemini is appropriate
-- OpenRouter: If configured, available as an alternative model provider
-- Brave Search: If configured, available for web search queries
+Check `~/.muavin/.env` for configured keys.
+
+- **OpenAI** (required): Embeddings (text-embedding-3-small)
+- **Gemini**: Google Search grounding, Imagen image generation, multimodal
+- **Grok (xAI)**: Real-time web + X/Twitter search, text generation
+- **Not configured:** OpenRouter, Brave Search
 
 ## Disambiguation
 
