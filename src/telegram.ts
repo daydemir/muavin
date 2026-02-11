@@ -1,5 +1,3 @@
-import { logMessage } from "./memory";
-
 export function toTelegramMarkdown(text: string): string {
   // Phase 1: Extract existing code blocks into placeholders
   const blocks: string[] = [];
@@ -71,19 +69,26 @@ export async function sendTelegram(
         return false;
       }
 
-      await logMessage("assistant", text, String(chatId)).catch(e =>
-        console.error("sendTelegram logMessage failed:", e)
-      );
-
       return true;
     }
 
     return false;
   }
 
-  await logMessage("assistant", text, String(chatId)).catch(e =>
-    console.error("sendTelegram logMessage failed:", e)
-  );
-
   return true;
+}
+
+export async function sendAndLog(
+  chatId: number,
+  text: string,
+  opts?: { parseMode?: string },
+): Promise<boolean> {
+  const { logMessage } = await import("./memory");
+  const success = await sendTelegram(chatId, text, opts);
+  if (success) {
+    logMessage("assistant", text, String(chatId)).catch(e =>
+      console.error("sendAndLog logMessage failed:", e)
+    );
+  }
+  return success;
 }

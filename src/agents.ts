@@ -107,40 +107,20 @@ export async function listAgents(filter?: {
   }
 }
 
-export async function getAgentSummary(): Promise<string> {
-  const running = await listAgents({ status: "running" });
-  const completed = await listAgents({ status: "completed" });
+export async function getAgentList(): Promise<string> {
+  const agents = await listAgents();
+  if (agents.length === 0) return "";
 
-  const now = Date.now();
-  const oneHourAgo = now - 60 * 60 * 1000;
+  const sorted = agents
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 20);
 
-  const recentCompleted = completed.filter((a) => {
-    const completedAt = a.completedAt
-      ? new Date(a.completedAt).getTime()
-      : 0;
-    return completedAt >= oneHourAgo;
-  });
+  const lines: string[] = ["[Agents]"];
 
-  if (running.length === 0 && recentCompleted.length === 0) {
-    return "";
-  }
-
-  const lines: string[] = ["[Background Agents]"];
-
-  for (const agent of running) {
-    const startedAt = agent.startedAt
-      ? new Date(agent.startedAt).getTime()
-      : now;
-    const elapsed = Math.floor((now - startedAt) / 1000 / 60);
-    lines.push(`Running: "${agent.task}" (${elapsed}m elapsed)`);
-  }
-
-  for (const agent of recentCompleted) {
-    const completedAt = agent.completedAt
-      ? new Date(agent.completedAt).getTime()
-      : now;
-    const ago = Math.floor((now - completedAt) / 1000 / 60);
-    lines.push(`Completed: "${agent.task}" (${ago}m ago)`);
+  for (const agent of sorted) {
+    const ts = agent.completedAt ?? agent.startedAt ?? agent.createdAt;
+    const ago = timeAgo(new Date(ts).getTime());
+    lines.push(`${agent.status}: "${agent.task}" (${ago})`);
   }
 
   return lines.join("\n");
@@ -241,8 +221,8 @@ export async function buildContext(opts: {
 
   // 4. Agent summary (voice only)
   if (full) {
-    const agentSummary = await getAgentSummary();
-    if (agentSummary) parts.push(agentSummary);
+    const agentList = await getAgentList();
+    if (agentList) parts.push(agentList);
   }
 
   // 5. Jobs summary (voice only)

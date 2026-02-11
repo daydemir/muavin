@@ -5,7 +5,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { callClaude } from "./claude";
-import { sendTelegram } from "./telegram";
+import { sendAndLog } from "./telegram";
 import { loadConfig } from "./utils";
 
 const SYSTEM_CWD = join(homedir(), ".muavin", "system");
@@ -309,7 +309,7 @@ export async function runHealthCheck(model?: string): Promise<void> {
       // Find the memory content for context
       const mem = memories.find(m => m.id === item.id);
       const message = `Memory conflict:\n${mem ? `"${mem.content}"` : `(ID: ${item.id})`}\n\n${item.question}`;
-      await sendTelegram(config.owner, message);
+      await sendAndLog(config.owner, message);
     }
     console.log(`Sent ${healthResult.clarify.length} clarification requests`);
   }

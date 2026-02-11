@@ -8,7 +8,7 @@ import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
 import { acquireLock, releaseLock, MUAVIN_DIR, writeOutbox, readOutbox, clearOutboxItems, timestamp } from "./utils";
-import { sendTelegram, toTelegramMarkdown } from "./telegram";
+import { sendAndLog, toTelegramMarkdown } from "./telegram";
 
 validateEnv();
 
@@ -225,7 +225,7 @@ async function processOutbox(): Promise<void> {
     }
 
     // Send to owner
-    const success = await sendTelegram(config.owner, result.text, { parseMode: "Markdown" });
+    const success = await sendAndLog(config.owner, result.text, { parseMode: "Markdown" });
     if (success) {
       console.log(timestamp("relay"), `Delivered ${outboxItems.length} outbox item(s) to owner`);
     }
