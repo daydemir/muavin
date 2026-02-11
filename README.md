@@ -1,7 +1,7 @@
 <div align="center">
 <h1>muavin</h1>
 
-A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram.
+A personal AI assistant that improves itself every day.
 
 [![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -11,17 +11,32 @@ A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram
 
 </div>
 
-## ✨ Features
+> [!WARNING]
+> **This is experimental, early-stage software.** Muavin uses Claude Code under the hood. It can execute arbitrary shell commands, read and write files anywhere on your filesystem, and make network requests. It also consumes significant Claude Code API tokens, especially with background jobs and agents running daily. Use at your own risk.
 
-- **Claude Code brain** - spawns the Claude CLI for every request with full tool access (filesystem, shell, web, MCP servers)
-- **Persistent memory** - stores conversations and auto-extracted facts in Supabase pgvector. Relevant context is injected into every conversation.
-- **Thought dumps** - share thoughts, ideas, and notes without triggering analysis. Muavin acknowledges briefly and stores them for later.
-- **Telegram interface** - text, photos, documents, group mentions. Chunked responses with Markdown.
-- **Background agents** - kick off multiple agents in parallel for long-running tasks. Managed with concurrency limits, timeouts, and automatic result delivery.
-- **Job system** - scheduled jobs with per-job launchd plists. Custom prompts or built-in actions.
-- **Health monitoring** - heartbeat daemon checks all services and sends AI-triaged alerts via Telegram.
+Muavin runs on your Mac and talks to you via Telegram. It stores conversations and facts in Supabase, so your memory is always backed up and portable. Every day it reviews its own logs, fixes what it can, and suggests ways it can help.
 
-## 🏗 Architecture
+## What makes this different
+
+### It reviews its own work
+
+Three default jobs run daily:
+
+- **Self-review** reviews recent conversations, logs, and memories for mistakes or stale information and attempts to fix what it can.
+- **Autonomous suggestions** proposes actions it could take on your behalf, based on what it knows about you.
+- **User suggestions** proposes high-value actions for you to consider.
+
+Each job sees how you responded to past suggestions and factors that into future ones.
+
+### Skills are learned, not pre-built
+
+Muavin ships with no built-in skills. You teach it through conversation. Say "learn how to check flight prices" and it researches the approach, tests it, and saves a reusable skill file. Skills are markdown files in `~/.muavin/skills/` that you can inspect and edit.
+
+### Your memory is portable
+
+Conversations and extracted facts live in Supabase with pgvector embeddings. Switch computers and nothing is lost. A pipeline extracts facts from your conversations every 2 hours. A daily audit cleans up duplicates, contradictions, and stale entries.
+
+## How it works
 
 ```mermaid
 flowchart TD
@@ -40,9 +55,11 @@ flowchart TD
     style Heartbeat fill:#ef4444,stroke:#dc2626,color:#fff
 ```
 
-> **Conductor** is the always-on orchestrator. It receives your Telegram messages, manages background agents, runs scheduled jobs, and stores everything in Supabase. **Heartbeat** monitors all services and alerts you if something goes down.
+**Conductor** is the always-on relay. It receives your Telegram messages, manages background agents, runs scheduled jobs, and stores everything in Supabase. **Heartbeat** monitors all services and alerts you if something goes down.
 
-## 🚀 Quick Start
+**Jobs** run on a schedule (cron expressions, each gets its own launchd plist). **Agents** run in the background for longer tasks. Results flow through an outbox. The relay decides what to deliver to you and what to skip.
+
+## Quick start
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/daydemir/muavin/main/install.sh | bash
@@ -62,7 +79,7 @@ muavin setup
 </details>
 
 <details>
-<summary><strong>Manual Installation</strong></summary>
+<summary><strong>Manual installation</strong></summary>
 
 ```bash
 git clone https://github.com/daydemir/muavin.git ~/.muavin/src
@@ -73,7 +90,7 @@ bun muavin setup
 
 </details>
 
-## 💻 Usage
+## Usage
 
 ```bash
 bun muavin setup     # Interactive setup wizard
@@ -85,7 +102,7 @@ bun muavin test      # Run smoke tests
 ```
 
 <details>
-<summary><strong>⚙️ Configuration</strong></summary>
+<summary><strong>Configuration</strong></summary>
 
 `~/.muavin/config.json`:
 
@@ -117,7 +134,7 @@ bun muavin test      # Run smoke tests
 
 </details>
 
-## 🙏 Credits
+## Credits
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) by Anthropic
 - [Grammy](https://grammy.dev) - Telegram bot framework
