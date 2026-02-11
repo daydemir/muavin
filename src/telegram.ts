@@ -1,10 +1,25 @@
 import { logMessage } from "./memory";
 
 export function toTelegramMarkdown(text: string): string {
-  return text
+  // Phase 1: Extract existing code blocks into placeholders
+  const blocks: string[] = [];
+  let result = text.replace(/```[\s\S]*?```/g, (m) => {
+    blocks.push(m);
+    return `\0CB${blocks.length - 1}\0`;
+  });
+
+  // Phase 2: Convert markdown tables to code blocks, then format
+  result = result
+    .replace(/((?:^|\n)\|[^\n]+\|[ \t]*(?:\n\|[^\n]+\|[ \t]*)*)/g, (match) => {
+      const prefix = match.startsWith("\n") ? "\n" : "";
+      return `${prefix}\`\`\`\n${match.trim()}\n\`\`\``;
+    })
     .replace(/\*\*(.*?)\*\*/g, "*$1*")
     .replace(/__(.*?)__/g, "_$1_")
     .replace(/~~(.*?)~~/g, "$1");
+
+  // Phase 3: Restore code blocks
+  return result.replace(/\0CB(\d+)\0/g, (_, i) => blocks[Number(i)]);
 }
 
 export async function sendTelegram(
