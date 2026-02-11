@@ -21,8 +21,8 @@ A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram
 - **Claude Code brain** — spawns the Claude CLI for every request, with full tool access (filesystem, shell, web search, MCP servers)
 - **Persistent memory** — Supabase pgvector stores conversations and auto-extracted facts; relevant context is injected into every conversation
 - **Telegram interface** — text, photos, documents, group mentions; chunked responses with Markdown
-- **Cron system** — configurable scheduled jobs (custom prompts or built-in actions) via `config.json`
-- **Health monitoring** — heartbeat daemon checks relay, cron, Supabase, OpenAI, Telegram; alerts via Telegram with 2h dedup
+- **Job system** — configurable scheduled jobs (custom prompts or built-in actions) with per-job launchd plists
+- **Health monitoring** — heartbeat daemon checks relay, job plists, Supabase, OpenAI, Telegram; alerts via Telegram with 2h dedup
 
 ## 🏗 Architecture
 
@@ -32,24 +32,24 @@ flowchart TD
 
     subgraph Daemons["macOS launchd daemons"]
         Relay["🔄 Relay\n(KeepAlive)"]
-        Cron["⏰ Cron\n(every 15 min)"]
+        Jobs["⏰ Jobs\n(per-job plists)"]
         Heartbeat["💓 Heartbeat\n(every 30 min)"]
     end
 
     TG <--> Relay
     TG <-- alerts --- Heartbeat
-    TG <-- job results --- Cron
+    TG <-- job results --- Jobs
 
     Relay -->|spawns per message| Claude["🧠 Claude CLI"]
     Relay <-->|store messages\nvector search| Supa[("Supabase\npgvector")]
 
-    Cron -->|extract facts\nmemory health| Supa
-    Cron -->|scheduled prompts| Claude
+    Jobs -->|extract facts\nmemory health| Supa
+    Jobs -->|scheduled prompts| Claude
 
     Claude --> MCP["MCP Servers\nGoogle Workspace · Apple Reminders\nApple Notes · Web · Files · Git"]
 
     Heartbeat -.->|monitors| Relay
-    Heartbeat -.->|checks freshness| Cron
+    Heartbeat -.->|checks freshness| Jobs
     Heartbeat -.->|test query| Supa
     Heartbeat -.->|test embed| OAI["OpenAI\n(embeddings)"]
     Heartbeat -.->|getMe| TG
@@ -57,7 +57,7 @@ flowchart TD
     Supa <-.->|embed text| OAI
 ```
 
-> Three launchd daemons: **Relay** receives Telegram messages and spawns Claude CLI with vector-searched memory context. **Cron** runs scheduled jobs — fact extraction, memory health checks, and custom prompts. **Heartbeat** monitors all services and sends AI-triaged alerts.
+> Two core daemons (relay, heartbeat) + per-job launchd plists: **Relay** receives Telegram messages and spawns Claude CLI with vector-searched memory context. **Jobs** run on independent schedules — fact extraction, memory health checks, and custom prompts. **Heartbeat** monitors all services and sends AI-triaged alerts.
 
 ## 🚀 Quick Start
 
@@ -139,7 +139,7 @@ bun muavin test      # Run smoke tests
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) by Anthropic
 - [Grammy](https://grammy.dev) — Telegram bot framework
 - [Supabase](https://supabase.com) — pgvector for memory
-- [Croner](https://github.com/hexagon/croner) — cron scheduling
+- [Croner](https://github.com/hexagon/croner) — cron expression parsing (for status display)
 - Inspired by [OpenClaw](https://github.com/openclaw/openclaw), [godagoo/claude-telegram-relay](https://github.com/godagoo/claude-telegram-relay), and [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
 
 ## License

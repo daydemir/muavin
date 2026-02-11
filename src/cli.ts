@@ -981,7 +981,7 @@ async function stopCommand() {
   const uidProc = Bun.spawn(["id", "-u"], { stdout: "pipe" });
   const uid = (await new Response(uidProc.stdout).text()).trim();
 
-  const labels = ["ai.muavin.relay", "ai.muavin.cron", "ai.muavin.heartbeat"];
+  const labels = ["ai.muavin.relay", "ai.muavin.heartbeat"];
 
   for (const label of labels) {
     const proc = Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
@@ -997,6 +997,29 @@ async function stopCommand() {
     } else {
       dim(`  ${label} not loaded`);
     }
+  }
+
+  // Stop all job plists
+  const jobListProc = Bun.spawn(["launchctl", "list"], { stdout: "pipe" });
+  const jobListOutput = await new Response(jobListProc.stdout).text();
+  const jobLabels = jobListOutput
+    .split("\n")
+    .filter((line) => line.includes("ai.muavin.job."))
+    .map((line) => line.trim().split(/\s+/).pop()!)
+    .filter(Boolean);
+
+  const homeDir = process.env.HOME!;
+  for (const label of jobLabels) {
+    await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    }).exited;
+    ok(`Stopped ${label}`);
+
+    // Delete plist file
+    const plistFile = `${homeDir}/Library/LaunchAgents/${label}.plist`;
+    const { unlink: unlinkFile } = await import("fs/promises");
+    await unlinkFile(plistFile).catch(() => {});
   }
 
   // Clean up lock file
@@ -1045,7 +1068,6 @@ async function deployCommand() {
 
   const plists = [
     { file: "ai.muavin.relay.plist", label: "ai.muavin.relay" },
-    { file: "ai.muavin.cron.plist", label: "ai.muavin.cron" },
     { file: "ai.muavin.heartbeat.plist", label: "ai.muavin.heartbeat" },
   ];
 
@@ -1081,6 +1103,15 @@ async function deployCommand() {
     } else {
       fail(`Failed to load ${label}`);
     }
+  }
+
+  // Sync job plists
+  try {
+    const { syncJobPlists } = await import("./jobs");
+    await syncJobPlists();
+    ok("Synced job plists");
+  } catch (e) {
+    warn(`Job plist sync failed: ${e instanceof Error ? e.message : e}`);
   }
 
   console.log();
@@ -1135,25 +1166,6 @@ async function statusCommand() {
     console.error(pc.dim("  Error reading sessions"));
   }
 
-  // Check cron state
-  console.log();
-  heading("Cron:");
-  const cronStatePath = `${process.env.HOME}/.muavin/cron-state.json`;
-  try {
-    const cronFile = Bun.file(cronStatePath);
-    if (await cronFile.exists()) {
-      const cronState = await cronFile.json();
-      for (const [jobId, timestamp] of Object.entries(cronState)) {
-        const date = typeof timestamp === "number" ? new Date(timestamp as number).toLocaleString() : "never";
-        console.log(pc.dim(`  ${jobId}: ${date}`));
-      }
-    } else {
-      dim("  No cron state file");
-    }
-  } catch {
-    console.error(pc.dim("  Error reading cron state"));
-  }
-
   // Check heartbeat
   console.log();
   heading("Heartbeat:");
@@ -1189,14 +1201,24 @@ async function statusCommand() {
       console.log(pc.dim(`  ${enabled.length} enabled${disabled.length > 0 ? `, ${disabled.length} disabled` : ""}`));
       console.log();
 
-      // Load cron state
-      let cronState: Record<string, number> = {};
+      // Load job state
+      const jobStatePath = `${muavinDir}/job-state.json`;
+      let jobState: Record<string, number> = {};
       try {
-        cronState = JSON.parse(await readFile(cronStatePath, "utf-8"));
+        jobState = JSON.parse(await readFile(jobStatePath, "utf-8"));
       } catch {}
 
+      // Get loaded job plists
+      const launchListProc = Bun.spawn(["launchctl", "list"], { stdout: "pipe" });
+      const launchListOutput = await new Response(launchListProc.stdout).text();
+      const loadedJobLabels = new Set(
+        launchListOutput.split("\n")
+          .filter(l => l.includes("ai.muavin.job."))
+          .map(l => l.trim().split(/\s+/).pop()!)
+      );
+
       for (const job of allJobs) {
-        const lastRun = cronState[job.id];
+        const lastRun = jobState[job.id];
         const lastStr = lastRun ? timeAgo(lastRun) : "never";
         const enabledStr = !job.enabled ? pc.yellow("[off]") : job.system ? pc.cyan("[sys]") : pc.green("[on] ");
         let nextStr = "—";
@@ -1209,9 +1231,12 @@ async function statusCommand() {
             nextStr = pc.red("invalid schedule");
           }
         }
+        const loadedStr = job.enabled
+          ? loadedJobLabels.has(`ai.muavin.job.${job.id}`) ? pc.green("[loaded]") : pc.red("[not loaded]")
+          : "";
         const name = (job.name || job.id).padEnd(20);
         const scheduleStr = job.schedule.padEnd(18);
-        console.log(pc.dim(`  ${enabledStr} ${name} ${scheduleStr} last: ${lastStr.padEnd(10)} next: ${nextStr}`));
+        console.log(pc.dim(`  ${enabledStr} ${name} ${scheduleStr} last: ${lastStr.padEnd(10)} next: ${nextStr}`) + (loadedStr ? ` ${loadedStr}` : ""));
       }
     }
   } catch {
@@ -1376,8 +1401,8 @@ async function testCommand() {
     fail(`Telegram test failed: ${error}`);
   }
 
-  // Test cron config
-  heading("Testing cron config...");
+  // Test jobs config
+  heading("Testing jobs config...");
   try {
     const { loadJson, MUAVIN_DIR: muavinDir } = await import("./utils");
     const jobs = await loadJson<Array<{ id: string; schedule: string; enabled: boolean }>>(
