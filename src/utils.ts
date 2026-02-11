@@ -15,12 +15,20 @@ export interface Config {
   allowUsers: number[];
   allowGroups: number[];
   model?: string;
-  claudeTimeoutMs?: number;
-  maxTurns?: number;
-  agentTimeoutMs?: number;
   startOnLogin?: boolean;
   recentMessageCount?: number;
   repoPath?: string;
+  // Relay
+  relayTimeoutMs?: number;
+  relayMaxTurns?: number;
+  // Jobs
+  jobTimeoutMs?: number;
+  jobMaxTurns?: number;
+  // Agents
+  agentTimeoutMs?: number;
+  agentMaxTurns?: number;
+  agentConcurrency?: number;
+  // Extensible for CLI editor
   [key: string]: unknown;
 }
 
