@@ -200,20 +200,25 @@ export async function buildContext(opts: {
   // 2 & 3. Semantic search + recent messages in parallel (15s timeout each)
   const { searchContext, getRecentMessages } = await import("./memory");
 
+  const searchAbort = new AbortController();
+  const recentAbort = new AbortController();
+
   const [contextResults, recent] = await Promise.all([
     Promise.race([
-      searchContext(opts.query, 3),
+      searchContext(opts.query, 3, searchAbort.signal),
       new Promise<[]>(resolve => setTimeout(() => {
         console.error("buildContext: Supabase search timed out (15s)");
+        searchAbort.abort();
         resolve([]);
       }, 15000)),
     ]).catch(() => []),
 
     (full && opts.chatId && opts.recentCount)
       ? Promise.race([
-          getRecentMessages(String(opts.chatId), opts.recentCount),
+          getRecentMessages(String(opts.chatId), opts.recentCount, recentAbort.signal),
           new Promise<[]>(resolve => setTimeout(() => {
             console.error("buildContext: recent messages timed out (15s)");
+            recentAbort.abort();
             resolve([]);
           }, 15000)),
         ]).catch(() => [])

@@ -60,12 +60,15 @@ async function searchMemoryOnly(
   queryEmbedding: number[],
   threshold: number,
   limit: number,
+  abortSignal?: AbortSignal,
 ): Promise<Array<{ content: string; source: string; similarity: number }>> {
-  const { data, error } = await supabase.rpc("search_memory", {
+  let query = supabase.rpc("search_memory", {
     query_embedding: queryEmbedding,
     match_threshold: threshold,
     match_count: limit,
   });
+  if (abortSignal) query = query.abortSignal(abortSignal);
+  const { data, error } = await query;
   if (error) {
     console.error("searchMemoryOnly error:", error);
     return [];
@@ -77,12 +80,15 @@ async function searchMessagesOnly(
   queryEmbedding: number[],
   threshold: number,
   limit: number,
+  abortSignal?: AbortSignal,
 ): Promise<Array<{ content: string; source: string; similarity: number }>> {
-  const { data, error } = await supabase.rpc("search_messages", {
+  let query = supabase.rpc("search_messages", {
     query_embedding: queryEmbedding,
     match_threshold: threshold,
     match_count: limit,
   });
+  if (abortSignal) query = query.abortSignal(abortSignal);
+  const { data, error } = await query;
   if (error) {
     console.error("searchMessagesOnly error:", error);
     return [];
@@ -104,12 +110,13 @@ function isGoodEnough(
 export async function searchContext(
   query: string,
   limit = 5,
+  abortSignal?: AbortSignal,
 ): Promise<Array<{ content: string; source: string; similarity: number }>> {
   const queryEmbedding = await embed(query);
 
   const [memoryResults, messageResults] = await Promise.all([
-    searchMemoryOnly(queryEmbedding, 0.7, limit),
-    searchMessagesOnly(queryEmbedding, 0.75, limit),
+    searchMemoryOnly(queryEmbedding, 0.7, limit, abortSignal),
+    searchMessagesOnly(queryEmbedding, 0.75, limit, abortSignal),
   ]);
 
   if (isGoodEnough(memoryResults, limit)) {
@@ -209,13 +216,16 @@ export async function extractMemories(model?: string): Promise<number> {
 export async function getRecentMessages(
   chatId: string,
   limit: number,
+  abortSignal?: AbortSignal,
 ): Promise<Array<{ role: string; content: string; created_at: string }>> {
-  const { data, error } = await supabase
+  let query = supabase
     .from("messages")
     .select("role, content, created_at")
     .eq("chat_id", chatId)
     .order("created_at", { ascending: false })
     .limit(limit);
+  if (abortSignal) query = query.abortSignal(abortSignal);
+  const { data, error } = await query;
 
   if (error || !data) return [];
   return data.reverse();
