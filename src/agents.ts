@@ -136,10 +136,7 @@ export async function getAgentSummary(): Promise<string> {
       ? new Date(agent.completedAt).getTime()
       : now;
     const ago = Math.floor((now - completedAt) / 1000 / 60);
-    const resultPreview = agent.result
-      ? agent.result.slice(0, 100)
-      : "no result";
-    lines.push(`Completed: "${agent.task}" (${ago}m ago) — ${resultPreview}...`);
+    lines.push(`Completed: "${agent.task}" (${ago}m ago)`);
   }
 
   return lines.join("\n");
