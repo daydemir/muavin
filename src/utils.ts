@@ -164,9 +164,7 @@ export async function reloadService(uid: string, label: string, plistPath: strin
   const bout = Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], { stdout: "pipe", stderr: "pipe" });
   await bout.exited;
 
-  if (bout.exitCode === 0) {
-    await waitForUnload(label);
-  }
+  await waitForUnload(label, 10000);
 
   const bs = Bun.spawn(["launchctl", "bootstrap", `gui/${uid}`, plistPath], { stdout: "pipe", stderr: "pipe" });
   await bs.exited;
