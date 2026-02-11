@@ -1,5 +1,12 @@
 import { logMessage } from "./memory";
 
+export function toTelegramMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "*$1*")
+    .replace(/__(.*?)__/g, "_$1_")
+    .replace(/~~(.*?)~~/g, "$1");
+}
+
 export async function sendTelegram(
   chatId: number,
   text: string,
@@ -7,6 +14,8 @@ export async function sendTelegram(
 ): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN not set");
+
+  text = toTelegramMarkdown(text);
 
   const body: { chat_id: number; text: string; parse_mode?: string } = {
     chat_id: chatId,
