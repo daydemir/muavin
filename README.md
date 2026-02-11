@@ -18,46 +18,26 @@ A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram
 
 ## ✨ Features
 
-- **Claude Code brain** — spawns the Claude CLI for every request, with full tool access (filesystem, shell, web search, MCP servers)
-- **Persistent memory** — Supabase pgvector stores conversations and auto-extracted facts; relevant context is injected into every conversation
-- **Telegram interface** — text, photos, documents, group mentions; chunked responses with Markdown
-- **Job system** — configurable scheduled jobs (custom prompts or built-in actions) with per-job launchd plists
-- **Health monitoring** — heartbeat daemon checks relay, job plists, Supabase, OpenAI, Telegram; alerts via Telegram with 2h dedup
+- **Claude Code brain** - spawns the Claude CLI for every request with full tool access (filesystem, shell, web, MCP servers)
+- **Persistent memory** - stores conversations and auto-extracted facts in Supabase pgvector. Relevant context is injected into every conversation.
+- **Telegram interface** - text, photos, documents, group mentions. Chunked responses with Markdown.
+- **Job system** - scheduled jobs with per-job launchd plists. Custom prompts or built-in actions.
+- **Health monitoring** - heartbeat daemon checks all services and sends AI-triaged alerts via Telegram.
 
 ## 🏗 Architecture
 
 ```mermaid
-flowchart TD
-    You((You)) <-->|messages\nphotos\ndocs| TG[Telegram]
+flowchart LR
+    You((You)) <-->|Telegram| Conductor["Conductor"]
 
-    subgraph Daemons["macOS launchd daemons"]
-        Relay["🔄 Relay\n(KeepAlive)"]
-        Jobs["⏰ Jobs\n(per-job plists)"]
-        Heartbeat["💓 Heartbeat\n(every 30 min)"]
-    end
+    Conductor --- Agents["Agents\n∙ research\n∙ custom tasks"]
+    Conductor --- Jobs["Jobs\n∙ fact extraction\n∙ scheduled prompts"]
+    Conductor --- Supabase[("Supabase\n∙ messages\n∙ memory")]
 
-    TG <--> Relay
-    Heartbeat -->|alerts| TG
-    Jobs -->|job results| TG
-
-    Relay -->|spawns per message| Claude["🧠 Claude CLI"]
-    Relay <-->|store messages\nvector search| Supa[("Supabase\npgvector")]
-
-    Jobs -->|extract facts\nmemory health| Supa
-    Jobs -->|scheduled prompts| Claude
-
-    Claude --> MCP["MCP Servers\nGoogle Workspace · Apple Reminders\nApple Notes · Web · Files · Git"]
-
-    Heartbeat -.->|monitors| Relay
-    Heartbeat -.->|checks freshness| Jobs
-    Heartbeat -.->|test query| Supa
-    Heartbeat -.->|test embed| OAI["OpenAI\n(embeddings)"]
-    Heartbeat -.->|getMe| TG
-
-    Supa -.->|embed text| OAI
+    Heartbeat["Heartbeat"] -.->|monitors| Conductor
 ```
 
-> Two core daemons (relay, heartbeat) + per-job launchd plists: **Relay** receives Telegram messages and spawns Claude CLI with vector-searched memory context. **Jobs** run on independent schedules — fact extraction, memory health checks, and custom prompts. **Heartbeat** monitors all services and sends AI-triaged alerts.
+> **Conductor** is the always-on orchestrator. It receives your Telegram messages, manages background agents, runs scheduled jobs, and stores everything in Supabase. **Heartbeat** monitors all services and alerts you if something goes down.
 
 ## 🚀 Quick Start
 
@@ -108,7 +88,7 @@ bun muavin test      # Run smoke tests
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `owner` | Your Telegram user ID | — |
+| `owner` | Your Telegram user ID | - |
 | `allowUsers` | Allowed Telegram user IDs | `[]` |
 | `allowGroups` | Allowed Telegram group IDs | `[]` |
 | `model` | Claude model (`sonnet`, `opus`, `haiku`) | `sonnet` |
@@ -137,9 +117,9 @@ bun muavin test      # Run smoke tests
 ## 🙏 Credits
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) by Anthropic
-- [Grammy](https://grammy.dev) — Telegram bot framework
-- [Supabase](https://supabase.com) — pgvector for memory
-- [Croner](https://github.com/hexagon/croner) — cron expression parsing (for status display)
+- [Grammy](https://grammy.dev) - Telegram bot framework
+- [Supabase](https://supabase.com) - pgvector for memory
+- [Croner](https://github.com/hexagon/croner) - cron expression parsing (for status display)
 - Inspired by [OpenClaw](https://github.com/openclaw/openclaw), [godagoo/claude-telegram-relay](https://github.com/godagoo/claude-telegram-relay), and [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
 
 ## License
