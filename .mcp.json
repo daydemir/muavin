@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "muavin-apple": {
+      "command": "bun",
+      "args": ["run", "src/mcp/apple-mcp.ts"],
+      "cwd": "/Users/deniz/Build/deniz/claw"
+    }
+  }
+}
