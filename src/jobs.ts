@@ -69,6 +69,8 @@ If nothing needs improvement, respond with exactly: SKIP`,
 
 Think ambitiously. You have full command-line access, web search, file system, APIs, and can create agents for long-running tasks. Examples: research a topic they mentioned, set up a monitoring script, organize files, write a comparison doc, automate a repetitive workflow.
 
+Review the message history for your past autonomous suggestions and how the user responded. The semantic memory context may also surface older patterns. Note which types of suggestions were welcomed vs ignored — adapt accordingly. Don't over-index on individual non-responses (the user may have been busy or distracted), but notice trends across multiple deliveries.
+
 Rules:
 - Only suggest things you can actually do end-to-end without user input
 - Be specific — "I could research X and write up findings" not "I could help with research"
@@ -92,6 +94,8 @@ Be extremely selective. The user is busy. Only surface things that are:
 - Things you can partially help with or automate
 
 A day with no suggestion is better than a low-value one. If you suggest something, also mention how you can help (e.g., "I can draft the email if you want" or "I can research options while you decide").
+
+Review the message history for your past user suggestions and whether they were acted on or dismissed. The semantic memory context may also reveal older patterns. Adapt based on trends — if certain types were consistently ignored, try different angles. Don't read too much into individual non-responses (busy, distracted, changed priorities), but do learn from repeated patterns.
 
 Max 1 suggestion. If nothing meets the bar, respond with exactly: SKIP`,
   },
