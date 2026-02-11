@@ -69,6 +69,7 @@ try {
       maxTurns: config.jobMaxTurns ?? 100,
       timeoutMs: config.jobTimeoutMs ?? 600000,
       appendSystemPrompt,
+      model: job.model,
     });
 
     if (result.text.trim() === "SKIP") {

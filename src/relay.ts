@@ -290,6 +290,7 @@ async function runAgent(agent: AgentFile): Promise<void> {
       cwd: join(MUAVIN_DIR, "system"),
       timeoutMs: config.agentTimeoutMs ?? 600000,
       maxTurns: config.agentMaxTurns ?? 100,
+      model: agent.model,
     });
 
     // Mark as completed

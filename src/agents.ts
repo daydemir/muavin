@@ -19,6 +19,7 @@ export interface AgentFile {
   deliveredResult?: string;
   error?: string;
   pid?: number;
+  model?: string;
   _filename?: string;
 }
 
@@ -26,6 +27,7 @@ export async function createAgent(opts: {
   task: string;
   prompt: string;
   chatId: number;
+  model?: string;
 }): Promise<AgentFile> {
   await mkdir(AGENTS_DIR, { recursive: true });
 
@@ -37,6 +39,7 @@ export async function createAgent(opts: {
     prompt: opts.prompt,
     chatId: opts.chatId,
     createdAt: new Date().toISOString(),
+    ...(opts.model && { model: opts.model }),
   };
 
   const filePath = join(AGENTS_DIR, `${id}.json`);

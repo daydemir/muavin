@@ -1254,9 +1254,10 @@ async function statusCommand() {
         const loadedStr = job.enabled
           ? loadedJobLabels.has(`ai.muavin.job.${job.id}`) ? pc.green("[loaded]") : pc.red("[not loaded]")
           : "";
+        const modelStr = job.model ? pc.magenta(`[${job.model}]`) : pc.dim("[default]");
         const name = (job.name || job.id).padEnd(20);
         const scheduleStr = job.schedule.padEnd(18);
-        console.log(pc.dim(`  ${typeStr} ${statusStr} ${name} ${scheduleStr} last: ${lastStr.padEnd(10)} next: ${nextStr}`) + (loadedStr ? ` ${loadedStr}` : ""));
+        console.log(pc.dim(`  ${typeStr} ${statusStr} ${name} ${modelStr} ${scheduleStr} last: ${lastStr.padEnd(10)} next: ${nextStr}`) + (loadedStr ? ` ${loadedStr}` : ""));
       }
     }
   } catch {
@@ -1277,27 +1278,31 @@ async function statusCommand() {
     } else {
       if (pending.length > 0) {
         for (const a of pending) {
-          console.log(pc.dim(`  ${pc.yellow("pending")}   ${a.task} (created ${timeAgo(new Date(a.createdAt).getTime())})`));
+          const modelTag = a.model ? ` [${a.model}]` : "";
+          console.log(pc.dim(`  ${pc.yellow("pending")}   ${a.task}${modelTag} (created ${timeAgo(new Date(a.createdAt).getTime())})`));
         }
       }
       if (running.length > 0) {
         for (const a of running) {
           const elapsed = a.startedAt ? timeAgo(new Date(a.startedAt).getTime()) : "?";
-          console.log(pc.dim(`  ${pc.cyan("running")}   ${a.task} (started ${elapsed})`));
+          const modelTag = a.model ? ` [${a.model}]` : "";
+          console.log(pc.dim(`  ${pc.cyan("running")}   ${a.task}${modelTag} (started ${elapsed})`));
         }
       }
       const recentCompleted = completed.slice(-5);
       if (recentCompleted.length > 0) {
         for (const a of recentCompleted) {
           const when = a.completedAt ? timeAgo(new Date(a.completedAt).getTime()) : "?";
-          console.log(pc.dim(`  ${pc.green("done")}      ${a.task} (${when})`));
+          const modelTag = a.model ? ` [${a.model}]` : "";
+          console.log(pc.dim(`  ${pc.green("done")}      ${a.task}${modelTag} (${when})`));
         }
       }
       const recentFailed = failed.slice(-3);
       if (recentFailed.length > 0) {
         for (const a of recentFailed) {
           const when = a.completedAt ? timeAgo(new Date(a.completedAt).getTime()) : "?";
-          console.log(pc.dim(`  ${pc.red("failed")}    ${a.task} (${when})`));
+          const modelTag = a.model ? ` [${a.model}]` : "";
+          console.log(pc.dim(`  ${pc.red("failed")}    ${a.task}${modelTag} (${when})`));
         }
       }
     }
@@ -1364,19 +1369,22 @@ async function agentCommand() {
   let agentPrompt = "";
   let chatId = 0;
 
+  let model = "";
+
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--task" && args[i + 1]) task = args[++i];
     else if (args[i] === "--prompt" && args[i + 1]) agentPrompt = args[++i];
     else if (args[i] === "--chat-id" && args[i + 1]) chatId = Number(args[++i]);
+    else if (args[i] === "--model" && args[i + 1]) model = args[++i];
   }
 
   if (!task || !agentPrompt || !chatId) {
-    fail("Usage: bun muavin agent create --task \"...\" --prompt \"...\" --chat-id <id>");
+    fail("Usage: bun muavin agent create --task \"...\" --prompt \"...\" --chat-id <id> [--model <model>]");
     return;
   }
 
   const { createAgent } = await import("./agents");
-  const agent = await createAgent({ task, prompt: agentPrompt, chatId });
+  const agent = await createAgent({ task, prompt: agentPrompt, chatId, ...(model && { model }) });
   ok(`Created agent ${agent.id}: ${agent.task}`);
   dim("  Relay will pick it up automatically");
 }

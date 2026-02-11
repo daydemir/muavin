@@ -10,6 +10,7 @@ export interface Job {
   action?: string;
   prompt?: string;
   type?: "system" | "default";
+  model?: string;
   enabled: boolean;
 }
 
@@ -43,6 +44,7 @@ export const DEFAULT_JOBS: Job[] = [
     name: "Self-improvement review",
     schedule: "0 4 * * *",
     type: "default",
+    model: "opus",
     enabled: true,
     prompt: `Review your own performance and make improvements. Check:
 
@@ -64,6 +66,7 @@ If nothing needs improvement, respond with exactly: SKIP`,
     name: "Autonomous action suggestions",
     schedule: "0 10 * * *",
     type: "default",
+    model: "opus",
     enabled: true,
     prompt: `Review what you know about the user — recent conversations, memories, active projects, goals, and context. Suggest 1-2 actions you can take autonomously (without user involvement) that would genuinely help.
 
@@ -84,6 +87,7 @@ If nothing useful comes to mind, respond with exactly: SKIP`,
     name: "High-ROI user suggestions",
     schedule: "0 11 * * *",
     type: "default",
+    model: "opus",
     enabled: true,
     prompt: `Review what you know about the user — conversations, memories, goals, deadlines, and context. Suggest actions the user could take that are high-ROI and time-sensitive.
 

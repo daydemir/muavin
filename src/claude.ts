@@ -38,10 +38,14 @@ export async function callClaude(prompt: string, opts?: {
   timeoutMs?: number;
   cwd?: string;
   disallowedTools?: string[];
+  model?: string;
 }): Promise<ClaudeResult> {
   const args = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"];
 
-  if (configModel) args.push("--model", configModel);
+  const effectiveModel = (opts?.model && ALLOWED_MODELS.includes(opts.model))
+    ? opts.model
+    : configModel;
+  if (effectiveModel) args.push("--model", effectiveModel);
 
   if (opts?.resume) args.push("--resume", opts.resume);
   if (opts?.appendSystemPrompt) args.push("--append-system-prompt", opts.appendSystemPrompt);
