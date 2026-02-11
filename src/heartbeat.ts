@@ -66,18 +66,29 @@ async function checkRelayLock(): Promise<string | null> {
   }
 }
 
-async function checkCronFreshness(): Promise<string | null> {
-  const cronStatePath = join(MUAVIN_DIR, "cron-state.json");
+async function checkJobPlists(): Promise<string | null> {
+  const jobsPath = join(MUAVIN_DIR, "jobs.json");
   try {
-    const s = await stat(cronStatePath);
-    const ageMs = Date.now() - s.mtimeMs;
-    const ageMin = Math.round(ageMs / 60_000);
-    if (ageMs > 30 * 60_000) {
-      return `Cron state stale (last modified ${ageMin}m ago)`;
+    const allJobs = JSON.parse(await readFile(jobsPath, "utf-8"));
+    const enabledJobs = allJobs.filter((j: any) => j.enabled);
+    if (enabledJobs.length === 0) return null;
+
+    const proc = Bun.spawn(["launchctl", "list"], { stdout: "pipe" });
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const missing: string[] = [];
+    for (const job of enabledJobs) {
+      if (!output.includes(`ai.muavin.job.${job.id}`)) {
+        missing.push(job.id);
+      }
+    }
+    if (missing.length > 0) {
+      return `Missing job plists: ${missing.join(", ")}`;
     }
     return null;
   } catch {
-    return "Cron state file not found";
+    return null;
   }
 }
 
@@ -121,7 +132,7 @@ async function checkTelegram(): Promise<string | null> {
 async function checkErrorLogs(lastRun: number): Promise<string | null> {
   const logFiles = [
     join(process.env.HOME ?? "~", "Library/Logs/muavin-relay.error.log"),
-    join(process.env.HOME ?? "~", "Library/Logs/muavin-cron.error.log"),
+    join(process.env.HOME ?? "~", "Library/Logs/muavin-jobs.error.log"),
   ];
   const recentErrors: string[] = [];
   for (const logFile of logFiles) {
@@ -168,7 +179,7 @@ async function main() {
   const checks = await Promise.allSettled([
     checkRelayDaemon(),
     checkRelayLock(),
-    checkCronFreshness(),
+    checkJobPlists(),
     checkSupabase(),
     checkOpenAI(),
     checkTelegram(),
@@ -204,6 +215,7 @@ async function main() {
         noSessionPersistence: true,
         maxTurns: 1,
         cwd: systemCwd,
+        timeoutMs: 120000,
       });
 
       if (result.text.trim() === "SKIP") {

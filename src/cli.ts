@@ -723,9 +723,12 @@ const configSections: ConfigSection[] = [
     title: "Behavior",
     fields: [
       { key: "claudeModel", label: "Claude model", source: "config", type: "select", options: ["sonnet", "opus", "haiku"] },
-      { key: "claudeTimeoutMs", label: "Claude timeout (ms)", source: "config", type: "number" },
-      { key: "maxTurns", label: "Max turns", source: "config", type: "number" },
+      { key: "relayTimeoutMs", label: "Relay timeout (ms)", source: "config", type: "number" },
+      { key: "relayMaxTurns", label: "Relay max turns", source: "config", type: "number" },
+      { key: "jobTimeoutMs", label: "Job timeout (ms)", source: "config", type: "number" },
+      { key: "jobMaxTurns", label: "Job max turns", source: "config", type: "number" },
       { key: "agentTimeoutMs", label: "Agent timeout (ms)", source: "config", type: "number" },
+      { key: "agentMaxTurns", label: "Agent max turns", source: "config", type: "number" },
       { key: "startOnLogin", label: "Start on login", source: "config", type: "boolean" },
     ],
   },
@@ -915,7 +918,7 @@ async function editField(
       currentConfig.owner = uid;
       if (!Array.isArray(currentConfig.allowUsers)) currentConfig.allowUsers = [];
       if (!currentConfig.allowUsers.includes(uid)) currentConfig.allowUsers.push(uid);
-    } else if (field.key === "claudeTimeoutMs" || field.key === "maxTurns" || field.key === "agentTimeoutMs") {
+    } else if (field.type === "number") {
       const num = Number(newValue);
       if (isNaN(num) || num <= 0) {
         fail("Must be a positive number");
@@ -928,7 +931,7 @@ async function editField(
     }
     await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
     config[field.key] = field.key === "owner" ? Number(newValue) :
-                        (field.key === "claudeTimeoutMs" || field.key === "maxTurns" || field.key === "agentTimeoutMs") ? Number(newValue) : newValue;
+                        field.type === "number" ? Number(newValue) : newValue;
   } else {
     await updateEnvFile({ [field.key]: newValue });
     env[field.key] = newValue;

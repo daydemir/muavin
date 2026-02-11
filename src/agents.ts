@@ -145,7 +145,7 @@ export async function getAgentSummary(): Promise<string> {
 
 export async function getJobsSummary(): Promise<string> {
   const jobsPath = join(MUAVIN_DIR, "jobs.json");
-  const cronStatePath = join(MUAVIN_DIR, "cron-state.json");
+  const jobStatePath = join(MUAVIN_DIR, "job-state.json");
 
   const lines: string[] = [];
 
@@ -166,14 +166,14 @@ export async function getJobsSummary(): Promise<string> {
     // Filter enabled jobs
     const jobs = allJobs.filter(j => j.enabled);
 
-    // Load cron state for last run times
-    const cronState = await loadJson<Record<string, number>>(cronStatePath) ?? {};
+    // Load job state for last run times
+    const jobState = await loadJson<Record<string, number>>(jobStatePath) ?? {};
 
     if (jobs.length === 0) return "";
 
     lines.push("[Active Jobs]");
     for (const job of jobs) {
-      const lastRun = cronState[job.id];
+      const lastRun = jobState[job.id];
       const lastRunStr = lastRun ? `last: ${timeAgo(lastRun)}` : "never run";
       const label = job.system ? `system, ${job.action ?? "custom prompt"}` : "user";
       lines.push(`  ${job.name || job.id} (${label}) — ${job.schedule} — ${lastRunStr}`);

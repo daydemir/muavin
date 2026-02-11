@@ -1,6 +1,6 @@
 # Jobs
 
-All scheduled tasks live in `~/.muavin/jobs.json` — both system and user jobs.
+All scheduled tasks live in `~/.muavin/jobs.json` — both system and user jobs. Each enabled job gets its own launchd plist, auto-synced by the relay when you edit jobs.json.
 
 ## Schema
 

@@ -3,14 +3,15 @@
 Personal AI assistant that communicates via Telegram. Runs headlessly on macOS.
 
 ## Architecture
-- 3 launchd daemons: relay (Telegram bot), cron (wakes every 15min, evaluates job schedules), heartbeat (30min health checks)
+- 2 core daemons (relay, heartbeat) + per-job launchd plists synced from jobs.json
 - Claude CLI spawned as subprocess via `src/claude.ts` with configurable cwd
 - Memory: Supabase pgvector (messages + extracted facts)
 - Background agents: JSON files in `~/.muavin/agents/`, processed by `src/agent-runner.ts`
 
 ## Key Files
 - `src/relay.ts` — Telegram bot (Grammy)
-- `src/cron.ts` — Scheduled job runner (reads jobs.json, wakes every 15min)
+- `src/run-job.ts` — Single-job executor (launchd entry point)
+- `src/jobs.ts` — Job plist generation + sync
 - `src/heartbeat.ts` — Health monitoring with AI-triaged alerts
 - `src/claude.ts` — Claude CLI spawner
 - `src/memory.ts` — Supabase vector search + memory extraction + generation
@@ -33,6 +34,6 @@ Personal AI assistant that communicates via Telegram. Runs headlessly on macOS.
 ## Running
 - `bun muavin setup` — Interactive setup wizard
 - `bun muavin start` — Deploy launchd daemons
-- `bun muavin status` — Dashboard (daemons, sessions, cron, heartbeat, jobs, agents)
+- `bun muavin status` — Dashboard (daemons, sessions, heartbeat, jobs, agents)
 - `bun muavin stop` — Stop all daemons
 - `bun muavin test` — Smoke tests

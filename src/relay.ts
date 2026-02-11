@@ -1,10 +1,12 @@
 import { validateEnv } from "./env";
 import { Bot, type Context } from "grammy";
 import { writeFile, readFile, unlink, mkdir, rename } from "fs/promises";
+import { watch } from "fs";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { logMessage } from "./memory";
 import { buildContext } from "./agents";
+import { syncJobPlists } from "./jobs";
 
 validateEnv();
 
@@ -223,8 +225,8 @@ async function handleMessage(ctx: Context, prompt: string): Promise<void> {
       const result = await callClaude(fullPrompt, {
         resume: session.sessionId ?? undefined,
         appendSystemPrompt,
-        timeoutMs: config.claudeTimeoutMs,
-        maxTurns: config.maxTurns ?? 100,
+        timeoutMs: config.relayTimeoutMs ?? 600000,
+        maxTurns: config.relayMaxTurns ?? 100,
         disallowedTools: ["Bash(claude*)"],
       });
 
@@ -356,6 +358,14 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.exit(0);
   });
 }
+
+// ── Watch jobs.json → auto-sync launchd plists ──────────────
+
+let syncTimeout: ReturnType<typeof setTimeout> | null = null;
+watch(join(MUAVIN_DIR, "jobs.json"), () => {
+  if (syncTimeout) clearTimeout(syncTimeout);
+  syncTimeout = setTimeout(() => syncJobPlists().catch((e) => console.error("Job sync error:", e)), 1000);
+});
 
 // ── Start ───────────────────────────────────────────────────
 

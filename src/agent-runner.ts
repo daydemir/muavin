@@ -76,8 +76,8 @@ try {
 }
 
 const config = JSON.parse(await readFile(configPath, "utf-8"));
-const agentMaxTurns = config.maxTurns ?? 100;
-const agentTimeoutMs = config.agentTimeoutMs ?? 3600000;
+const agentMaxTurns = config.agentMaxTurns ?? 100;
+const agentTimeoutMs = config.agentTimeoutMs ?? 10800000;
 const recentMessageCount = config.recentMessageCount ?? 20;
 
 // ── Core logic ──────────────────────────────────────────────────
@@ -184,6 +184,8 @@ async function processAgents(): Promise<boolean> {
       const deliveryResult = await callClaude(deliveryPrompt, {
         noSessionPersistence: true,
         appendSystemPrompt: deliveryContext,
+        maxTurns: 3,
+        timeoutMs: 300000,
       });
 
       const deliveryText = deliveryResult.text.trim();

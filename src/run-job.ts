@@ -72,8 +72,8 @@ try {
     const appendSystemPrompt = await buildContext({ query: job.prompt });
     const result = await callClaude(fullPrompt, {
       noSessionPersistence: true,
-      maxTurns: config.maxTurns ?? 100,
-      timeoutMs: config.claudeTimeoutMs,
+      maxTurns: config.jobMaxTurns ?? 100,
+      timeoutMs: config.jobTimeoutMs ?? 600000,
       appendSystemPrompt,
     });
 

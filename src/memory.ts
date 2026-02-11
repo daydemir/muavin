@@ -152,6 +152,8 @@ export async function extractMemories(): Promise<number> {
       const result = await callClaude(prompt, {
         noSessionPersistence: true,
         cwd: SYSTEM_CWD,
+        maxTurns: 1,
+        timeoutMs: 300000,
       });
 
       // Mark as processed immediately (even if parsing fails)
@@ -250,6 +252,8 @@ export async function runHealthCheck(): Promise<void> {
   const result = await callClaude(prompt, {
     noSessionPersistence: true,
     cwd: SYSTEM_CWD,
+    maxTurns: 1,
+    timeoutMs: 300000,
   });
   let healthResult: HealthCheckResult;
 

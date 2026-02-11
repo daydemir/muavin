@@ -3,9 +3,12 @@
   "allowUsers": [],
   "allowGroups": [],
   "model": "opus",
-  "claudeTimeoutMs": 43200000,
-  "maxTurns": 100,
-  "agentTimeoutMs": 600000,
+  "relayTimeoutMs": 600000,
+  "relayMaxTurns": 100,
+  "jobTimeoutMs": 600000,
+  "jobMaxTurns": 100,
+  "agentTimeoutMs": 10800000,
+  "agentMaxTurns": 100,
   "recentMessageCount": 10,
   "startOnLogin": true
 }

@@ -4,11 +4,11 @@
   "type": "module",
   "scripts": {
     "relay": "bun run src/relay.ts",
-    "cron": "bun run src/cron.ts",
     "heartbeat": "bun run src/heartbeat.ts",
+    "run-job": "bun run src/run-job.ts",
     "dev": "bun run --watch src/relay.ts",
     "muavin": "bun run src/cli.ts",
-    "build": "bun build --compile src/relay.ts --outfile dist/muavin-relay && bun build --compile src/cron.ts --outfile dist/muavin-cron && bun build --compile src/heartbeat.ts --outfile dist/muavin-heartbeat && codesign --force --sign - --identifier ai.muavin.relay dist/muavin-relay && codesign --force --sign - --identifier ai.muavin.cron dist/muavin-cron && codesign --force --sign - --identifier ai.muavin.heartbeat dist/muavin-heartbeat"
+    "build": "bun build --compile src/relay.ts --outfile dist/muavin-relay && bun build --compile src/heartbeat.ts --outfile dist/muavin-heartbeat && bun build --compile src/run-job.ts --outfile dist/muavin-run-job && codesign --force --sign - --identifier ai.muavin.relay dist/muavin-relay && codesign --force --sign - --identifier ai.muavin.heartbeat dist/muavin-heartbeat && codesign --force --sign - --identifier ai.muavin.run-job dist/muavin-run-job"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
