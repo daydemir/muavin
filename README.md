@@ -15,6 +15,7 @@ A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram
 
 - **Claude Code brain** - spawns the Claude CLI for every request with full tool access (filesystem, shell, web, MCP servers)
 - **Persistent memory** - stores conversations and auto-extracted facts in Supabase pgvector. Relevant context is injected into every conversation.
+- **Thought dumps** - share thoughts, ideas, and notes without triggering analysis. Muavin acknowledges briefly and stores them for later.
 - **Telegram interface** - text, photos, documents, group mentions. Chunked responses with Markdown.
 - **Background agents** - kick off multiple agents in parallel for long-running tasks. Managed with concurrency limits, timeouts, and automatic result delivery.
 - **Job system** - scheduled jobs with per-job launchd plists. Custom prompts or built-in actions.
