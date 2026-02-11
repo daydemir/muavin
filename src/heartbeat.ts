@@ -172,7 +172,7 @@ async function checkStuckAgents(): Promise<string | null> {
           status: "failed",
           completedAt: new Date().toISOString(),
           error: "Stuck agent recovered by heartbeat (>2h)",
-        });
+        }, agent._filename);
       }
       return `Recovered ${stuck.length} stuck agent(s): ${stuck.map(a => a.task).join(", ")}`;
     }

@@ -8,7 +8,7 @@ import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
 import { acquireLock, releaseLock, MUAVIN_DIR, writeOutbox, readOutbox, clearOutboxItems, timestamp } from "./utils";
-import { sendTelegram } from "./telegram";
+import { sendTelegram, toTelegramMarkdown } from "./telegram";
 
 validateEnv();
 
@@ -280,7 +280,7 @@ async function runAgent(agent: AgentFile): Promise<void> {
       startedAt: new Date().toISOString(),
       lastStatusAt: new Date().toISOString(),
       pid: process.pid,
-    });
+    }, agent._filename);
 
     console.log(timestamp("relay"), `Starting agent ${agent.id}: "${agent.task}"`);
 
@@ -305,7 +305,7 @@ async function runAgent(agent: AgentFile): Promise<void> {
       status: "completed",
       completedAt: new Date().toISOString(),
       result: result.text,
-    });
+    }, agent._filename);
 
     const elapsed = Math.round((Date.now() - startTime) / 1000);
     console.log(timestamp("relay"), `Agent ${agent.id} completed in ${elapsed}s`);
@@ -330,7 +330,7 @@ async function runAgent(agent: AgentFile): Promise<void> {
       status: "failed",
       completedAt: new Date().toISOString(),
       error: errorMsg,
-    });
+    }, agent._filename);
 
     console.error(timestamp("relay"), `Agent ${agent.id} failed:`, errorMsg);
 
@@ -378,7 +378,7 @@ async function checkRunningAgents(): Promise<void> {
         // Update lastStatusAt
         await updateAgent(agent.id, {
           lastStatusAt: new Date().toISOString(),
-        });
+        }, agent._filename);
       }
 
       // Check for stuck agents (>2h with dead PID)
@@ -401,7 +401,7 @@ async function checkRunningAgents(): Promise<void> {
             status: "failed",
             completedAt: new Date().toISOString(),
             error: "Agent stuck (>2h with dead PID)",
-          });
+          }, agent._filename);
 
           await writeOutbox({
             source: "agent",
@@ -584,6 +584,7 @@ bot.on("message:voice", async (ctx) => {
 // ── Response chunking ───────────────────────────────────────
 
 async function sendChunk(ctx: Context, text: string): Promise<void> {
+  text = toTelegramMarkdown(text);
   try {
     await ctx.reply(text, { parse_mode: "Markdown" });
   } catch (e: any) {

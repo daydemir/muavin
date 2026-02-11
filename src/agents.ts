@@ -18,6 +18,7 @@ export interface AgentFile {
   deliveredResult?: string;
   error?: string;
   pid?: number;
+  _filename?: string;
 }
 
 export async function createAgent(opts: {
@@ -57,16 +58,14 @@ export async function getAgent(id: string): Promise<AgentFile | null> {
 
 export async function updateAgent(
   id: string,
-  updates: Partial<AgentFile>
+  updates: Partial<AgentFile>,
+  filename?: string,
 ): Promise<void> {
-  const filePath = join(AGENTS_DIR, `${id}.json`);
-  const current = await getAgent(id);
-  if (!current) throw new Error(`Agent ${id} not found`);
-
-  const updated = { ...current, ...updates };
+  const filePath = join(AGENTS_DIR, filename ?? `${id}.json`);
+  const current = JSON.parse(await readFile(filePath, "utf-8")) as AgentFile;
+  const { _filename, ...rest } = { ...current, ...updates };
   const tmpPath = `${filePath}.tmp`;
-
-  await writeFile(tmpPath, JSON.stringify(updated, null, 2));
+  await writeFile(tmpPath, JSON.stringify(rest, null, 2));
   await rename(tmpPath, filePath);
 }
 
@@ -84,6 +83,7 @@ export async function listAgents(filter?: {
       try {
         const content = await readFile(join(AGENTS_DIR, file), "utf-8");
         const agent: AgentFile = JSON.parse(content);
+        agent._filename = file;
 
         if (filter?.status && agent.status !== filter.status) continue;
 
@@ -280,7 +280,7 @@ export async function cleanupAgents(maxAgeMs: number): Promise<number> {
 
     if (age > maxAgeMs || overCap) {
       try {
-        await unlink(join(AGENTS_DIR, `${agent.id}.json`));
+        await unlink(join(AGENTS_DIR, agent._filename ?? `${agent.id}.json`));
         deleted++;
       } catch {
         continue;
