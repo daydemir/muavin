@@ -4,6 +4,7 @@ import { callClaude } from "./claude";
 import { runHealthCheck, extractMemories } from "./memory";
 import { cleanupAgents, buildContext } from "./agents";
 import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox } from "./utils";
+import type { Job } from "./jobs";
 
 validateEnv();
 
@@ -11,16 +12,6 @@ const jobId = Bun.argv[2];
 if (!jobId) {
   console.error("Usage: run-job.ts <jobId>");
   process.exit(1);
-}
-
-interface Job {
-  id: string;
-  name: string;
-  schedule: string;
-  action?: string;
-  prompt?: string;
-  system?: boolean;
-  enabled: boolean;
 }
 
 interface JobState {

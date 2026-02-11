@@ -6,6 +6,7 @@ import { resolve } from "path";
 import { readFile, mkdir } from "fs/promises";
 import pc from "picocolors";
 import { listAgents } from "./agents";
+import { seedDefaultJobs, type Job } from "./jobs";
 
 const ok = (msg: string) => console.log(pc.green(`✓ ${msg}`));
 const fail = (msg: string) => console.error(pc.red(`✗ ${msg}`));
@@ -680,11 +681,17 @@ async function installTemplates() {
   await Bun.write(systemClaudePath, "You are a worker agent. Be concise. Return raw results.\n");
   ok("Installed system/CLAUDE.md");
 
-  // Initialize jobs.json if not exists
+  // Seed default jobs (merge, don't overwrite)
   const jobsPath = `${muavinDir}/jobs.json`;
-  if (!(await Bun.file(jobsPath).exists())) {
-    await Bun.write(jobsPath, "[]");
-    ok("Created empty jobs.json");
+  const { loadJson, saveJson } = await import("./utils");
+  const existingJobs = await loadJson<Job[]>(jobsPath) ?? [];
+  const seeded = seedDefaultJobs(existingJobs);
+  const added = seeded.length - existingJobs.length;
+  await saveJson(jobsPath, seeded);
+  if (added > 0) {
+    ok(`Seeded ${added} default job(s)`);
+  } else {
+    ok("Default jobs already present");
   }
 }
 
@@ -1204,7 +1211,7 @@ async function statusCommand() {
   try {
     const { loadJson, MUAVIN_DIR: muavinDir } = await import("./utils");
     const jobsPath = `${muavinDir}/jobs.json`;
-    const allJobs = await loadJson<Array<{ id: string; name?: string; schedule: string; action?: string; prompt?: string; system?: boolean; enabled: boolean }>>(jobsPath);
+    const allJobs = await loadJson<Job[]>(jobsPath);
 
     if (!allJobs || allJobs.length === 0) {
       dim("  No jobs configured");
@@ -1233,7 +1240,8 @@ async function statusCommand() {
       for (const job of allJobs) {
         const lastRun = jobState[job.id];
         const lastStr = lastRun ? timeAgo(lastRun) : "never";
-        const enabledStr = !job.enabled ? pc.yellow("[off]") : job.system ? pc.cyan("[sys]") : pc.green("[on] ");
+        const typeStr = job.type === "system" ? pc.cyan("[sys]") : job.type === "default" ? pc.blue("[def]") : "     ";
+        const statusStr = job.enabled ? pc.green("[on] ") : pc.yellow("[off]");
         let nextStr = "—";
         if (job.enabled) {
           try {
@@ -1249,7 +1257,7 @@ async function statusCommand() {
           : "";
         const name = (job.name || job.id).padEnd(20);
         const scheduleStr = job.schedule.padEnd(18);
-        console.log(pc.dim(`  ${enabledStr} ${name} ${scheduleStr} last: ${lastStr.padEnd(10)} next: ${nextStr}`) + (loadedStr ? ` ${loadedStr}` : ""));
+        console.log(pc.dim(`  ${typeStr} ${statusStr} ${name} ${scheduleStr} last: ${lastStr.padEnd(10)} next: ${nextStr}`) + (loadedStr ? ` ${loadedStr}` : ""));
       }
     }
   } catch {

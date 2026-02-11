@@ -1,6 +1,7 @@
 import { readFile, writeFile, readdir, mkdir, unlink, rename } from "fs/promises";
 import { join } from "path";
 import { MUAVIN_DIR, loadJson, timeAgo } from "./utils";
+import type { Job } from "./jobs";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
 
@@ -150,15 +151,7 @@ export async function getJobsSummary(): Promise<string> {
 
   try {
     // Load all jobs from jobs.json
-    const allJobs = await loadJson<Array<{
-      id: string;
-      name: string;
-      schedule: string;
-      action?: string;
-      prompt?: string;
-      system?: boolean;
-      enabled: boolean;
-    }>>(jobsPath);
+    const allJobs = await loadJson<Job[]>(jobsPath);
 
     if (!allJobs || allJobs.length === 0) return "";
 
@@ -174,7 +167,7 @@ export async function getJobsSummary(): Promise<string> {
     for (const job of jobs) {
       const lastRun = jobState[job.id];
       const lastRunStr = lastRun ? `last: ${timeAgo(lastRun)}` : "never run";
-      const label = job.system ? `system, ${job.action ?? "custom prompt"}` : "user";
+      const label = job.type === "system" ? `system, ${job.action ?? "custom prompt"}` : job.type === "default" ? "default" : "user";
       lines.push(`  ${job.name || job.id} (${label}) — ${job.schedule} — ${lastRunStr}`);
     }
   } catch {

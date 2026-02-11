@@ -14,7 +14,12 @@ All scheduled tasks live in `~/.muavin/jobs.json` — both system and user jobs.
 }
 ```
 
-System jobs also have `"system": true` and `"action"` (built-in handler) instead of `"prompt"`.
+Jobs have a `type` field:
+- `"system"` — built-in action handler (has `"action"` instead of `"prompt"`)
+- `"default"` — ships with Muavin, prompt-based
+- omitted — user-created
+
+Default jobs can be toggled on/off but should not be deleted — they'll be re-added on next setup. To disable: set `"enabled": false`.
 
 ## Managing Jobs
 
@@ -54,7 +59,16 @@ For long-running monitoring (e.g., watching a deployment), consider:
 
 ## System Jobs
 
-These are infrastructure jobs — don't modify unless asked:
+These are infrastructure jobs (`type: "system"`) — don't modify unless asked:
 - `memory-health` — Audits for stale/duplicate/conflicting memories (daily 9am)
 - `memory-extraction` — Mines conversations for facts (every 2h)
 - `agent-cleanup` — Removes old completed/failed agent files (daily 3am)
+
+## Default Jobs
+
+These prompt-based jobs (`type: "default"`) ship with Muavin and run daily:
+- `self-improvement` — Reviews performance, fixes issues, proposes improvements (4am)
+- `autonomous-suggestions` — Suggests actions Muavin can take autonomously (10am)
+- `user-suggestions` — Suggests high-ROI actions for the user (11am)
+
+Default jobs can be toggled on/off like any job. To disable: set `"enabled": false`. Do not delete them — they will be re-added on setup.

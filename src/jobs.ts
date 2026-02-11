@@ -3,11 +3,115 @@ import { join } from "path";
 import { homedir } from "os";
 import { MUAVIN_DIR, loadJson, loadConfig } from "./utils";
 
-interface Job {
+export interface Job {
   id: string;
+  name?: string;
   schedule: string;
+  action?: string;
+  prompt?: string;
+  type?: "system" | "default";
   enabled: boolean;
-  [key: string]: unknown;
+}
+
+export const DEFAULT_JOBS: Job[] = [
+  {
+    id: "memory-health",
+    name: "Memory health check",
+    schedule: "0 9 * * *",
+    action: "memory-health",
+    type: "system",
+    enabled: true,
+  },
+  {
+    id: "memory-extraction",
+    name: "Extract memories",
+    schedule: "0 */2 * * *",
+    action: "extract-memories",
+    type: "system",
+    enabled: true,
+  },
+  {
+    id: "agent-cleanup",
+    name: "Agent cleanup",
+    schedule: "0 3 * * *",
+    action: "cleanup-agents",
+    type: "system",
+    enabled: true,
+  },
+  {
+    id: "self-improvement",
+    name: "Self-improvement review",
+    schedule: "0 4 * * *",
+    type: "default",
+    enabled: true,
+    prompt: `Review your own performance and make improvements. Check:
+
+1. Recent conversation messages (last 7 days) for patterns of user corrections, confusion, or frustration
+2. Agent delivery logs — any failed or skipped deliveries
+3. Job execution logs (~/Library/Logs/muavin-jobs.log) — any failures or bad output
+4. Memory store — stale, contradictory, or wrong facts
+5. Your prompt templates (~/.muavin/prompts/), docs (~/.muavin/docs/), and identity (~/.muavin/muavin.md) for inaccuracies
+
+For low-risk/obvious fixes (typos, stale facts, clearly wrong info): make the change directly and include what you changed and why in your response.
+For risky/significant changes: describe the proposed change and why, but do NOT make it — wait for user approval.
+
+Focus on concrete, specific improvements. Do not make changes for the sake of change.
+
+If nothing needs improvement, respond with exactly: SKIP`,
+  },
+  {
+    id: "autonomous-suggestions",
+    name: "Autonomous action suggestions",
+    schedule: "0 10 * * *",
+    type: "default",
+    enabled: true,
+    prompt: `Review what you know about the user — recent conversations, memories, active projects, goals, and context. Suggest 1-2 actions you can take autonomously (without user involvement) that would genuinely help.
+
+Think ambitiously. You have full command-line access, web search, file system, APIs, and can create agents for long-running tasks. Examples: research a topic they mentioned, set up a monitoring script, organize files, write a comparison doc, automate a repetitive workflow.
+
+Rules:
+- Only suggest things you can actually do end-to-end without user input
+- Be specific — "I could research X and write up findings" not "I could help with research"
+- Prefer high-impact actions over busywork
+- 1-2 suggestions max. Quality over quantity.
+
+If nothing useful comes to mind, respond with exactly: SKIP`,
+  },
+  {
+    id: "user-suggestions",
+    name: "High-ROI user suggestions",
+    schedule: "0 11 * * *",
+    type: "default",
+    enabled: true,
+    prompt: `Review what you know about the user — conversations, memories, goals, deadlines, and context. Suggest actions the user could take that are high-ROI and time-sensitive.
+
+Be extremely selective. The user is busy. Only surface things that are:
+- Truly worth their attention right now
+- High impact relative to effort
+- Time-sensitive or have a deadline approaching
+- Things you can partially help with or automate
+
+A day with no suggestion is better than a low-value one. If you suggest something, also mention how you can help (e.g., "I can draft the email if you want" or "I can research options while you decide").
+
+Max 1 suggestion. If nothing meets the bar, respond with exactly: SKIP`,
+  },
+];
+
+export function seedDefaultJobs(existing: Job[]): Job[] {
+  const result = existing.map((j) => ({ ...j }));
+  let added = 0;
+
+  for (const defaultJob of DEFAULT_JOBS) {
+    const match = result.find((j) => j.id === defaultJob.id);
+    if (!match) {
+      result.push({ ...defaultJob });
+      added++;
+    } else if (!match.type) {
+      match.type = defaultJob.type;
+    }
+  }
+
+  return result;
 }
 
 type LaunchdSchedule =
