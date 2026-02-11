@@ -591,6 +591,9 @@ async function sendChunk(ctx: Context, text: string): Promise<void> {
 }
 
 async function sendResponse(ctx: Context, response: string): Promise<void> {
+  if (!response.trim()) {
+    throw new Error("Claude returned an empty response");
+  }
   const MAX = 4000;
   if (response.length <= MAX) {
     await sendChunk(ctx, response);

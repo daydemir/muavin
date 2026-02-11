@@ -86,7 +86,7 @@ export async function callClaude(prompt: string, opts?: {
     }
 
     const result = {
-      text: parsed.result ?? stdout,
+      text: parsed.result || "",
       sessionId: parsed.session_id ?? "",
       costUsd: parsed.total_cost_usd ?? 0,
       durationMs: parsed.duration_ms ?? 0,
