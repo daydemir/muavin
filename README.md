@@ -37,8 +37,8 @@ flowchart TD
     end
 
     TG <--> Relay
-    TG <-- alerts --- Heartbeat
-    TG <-- job results --- Jobs
+    Heartbeat -->|alerts| TG
+    Jobs -->|job results| TG
 
     Relay -->|spawns per message| Claude["🧠 Claude CLI"]
     Relay <-->|store messages\nvector search| Supa[("Supabase\npgvector")]
@@ -54,7 +54,7 @@ flowchart TD
     Heartbeat -.->|test embed| OAI["OpenAI\n(embeddings)"]
     Heartbeat -.->|getMe| TG
 
-    Supa <-.->|embed text| OAI
+    Supa -.->|embed text| OAI
 ```
 
 > Two core daemons (relay, heartbeat) + per-job launchd plists: **Relay** receives Telegram messages and spawns Claude CLI with vector-searched memory context. **Jobs** run on independent schedules — fact extraction, memory health checks, and custom prompts. **Heartbeat** monitors all services and sends AI-triaged alerts.
