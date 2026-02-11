@@ -27,14 +27,21 @@ A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram
 ## 🏗 Architecture
 
 ```mermaid
-flowchart LR
-    You((You)) <-->|Telegram| Conductor["Conductor"]
+flowchart TD
+    You((You)) <-->|Telegram| Conductor
 
-    Conductor --- Agents["Agents\n∙ research\n∙ custom tasks"]
-    Conductor --- Jobs["Jobs\n∙ fact extraction\n∙ scheduled prompts"]
-    Conductor --- Supabase[("Supabase\n∙ messages\n∙ memory")]
+    Conductor --- Agents["Agents<br/><sub>research · custom tasks</sub>"]
+    Conductor --- Jobs["Jobs<br/><sub>fact extraction · schedules</sub>"]
+    Conductor --- Supabase[("Supabase<br/><sub>messages · memory</sub>")]
 
-    Heartbeat["Heartbeat"] -.->|monitors| Conductor
+    Heartbeat(["Heartbeat"]) -.->|monitors| Conductor
+
+    style You fill:#f5f5f5,stroke:#999,color:#333
+    style Conductor fill:#6366f1,stroke:#4f46e5,color:#fff
+    style Agents fill:#f97316,stroke:#ea580c,color:#fff
+    style Jobs fill:#f97316,stroke:#ea580c,color:#fff
+    style Supabase fill:#22c55e,stroke:#16a34a,color:#fff
+    style Heartbeat fill:#ef4444,stroke:#dc2626,color:#fff
 ```
 
 > **Conductor** is the always-on orchestrator. It receives your Telegram messages, manages background agents, runs scheduled jobs, and stores everything in Supabase. **Heartbeat** monitors all services and alerts you if something goes down.
