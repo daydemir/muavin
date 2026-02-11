@@ -997,6 +997,7 @@ async function configCommand() {
 
 async function stopCommand() {
   heading("Stopping Muavin daemons...\n");
+  const { waitForUnload } = await import("./utils");
 
   const uidProc = Bun.spawn(["id", "-u"], { stdout: "pipe" });
   const uid = (await new Response(uidProc.stdout).text()).trim();
@@ -1011,6 +1012,7 @@ async function stopCommand() {
     await proc.exited;
 
     if (proc.exitCode === 0) {
+      await waitForUnload(label);
       ok(`Stopped ${label}`);
     } else if (proc.exitCode === 3) {
       dim(`  ${label} not loaded`);
@@ -1030,10 +1032,12 @@ async function stopCommand() {
 
   const homeDir = process.env.HOME!;
   for (const label of jobLabels) {
-    await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
+    const jobProc = Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
       stdout: "pipe",
       stderr: "pipe",
-    }).exited;
+    });
+    await jobProc.exited;
+    if (jobProc.exitCode === 0) await waitForUnload(label);
     ok(`Stopped ${label}`);
 
     // Delete plist file
@@ -1058,6 +1062,7 @@ async function stopCommand() {
 
 async function deployCommand() {
   heading("Deploying...\n");
+  const { reloadService } = await import("./utils");
 
   const homeDir = process.env.HOME!;
 
@@ -1108,20 +1113,11 @@ async function deployCommand() {
     await Bun.write(destPath, plistContent);
     ok(`Copied ${file}`);
 
-    await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
-      stdout: "pipe",
-      stderr: "pipe",
-    }).exited;
-
-    const bootstrapProc = Bun.spawn([
-      "launchctl", "bootstrap", `gui/${uid}`, destPath,
-    ]);
-    await bootstrapProc.exited;
-
-    if (bootstrapProc.exitCode === 0 || bootstrapProc.exitCode === 5) {
+    const result = await reloadService(uid, label, destPath);
+    if (result.ok) {
       ok(`Loaded ${label}`);
     } else {
-      fail(`Failed to load ${label}`);
+      fail(`Failed to load ${label} (exit ${result.exitCode})`);
     }
   }
 

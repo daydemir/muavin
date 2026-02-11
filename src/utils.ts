@@ -132,3 +132,30 @@ export async function clearOutboxItems(filenames: string[]): Promise<void> {
     await unlink(join(OUTBOX_DIR, filename)).catch(() => {});
   }
 }
+
+// ── Launchd helpers ─────────────────────────────────────────
+
+export async function waitForUnload(label: string, timeoutMs = 3000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const p = Bun.spawn(["launchctl", "list", label], { stdout: "pipe", stderr: "pipe" });
+    await p.exited;
+    if (p.exitCode !== 0) return true;
+    await Bun.sleep(100);
+  }
+  return false;
+}
+
+export async function reloadService(uid: string, label: string, plistPath: string): Promise<{ ok: boolean; exitCode: number }> {
+  const bout = Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], { stdout: "pipe", stderr: "pipe" });
+  await bout.exited;
+
+  if (bout.exitCode === 0) {
+    await waitForUnload(label);
+  }
+
+  const bs = Bun.spawn(["launchctl", "bootstrap", `gui/${uid}`, plistPath], { stdout: "pipe", stderr: "pipe" });
+  await bs.exited;
+
+  return { ok: bs.exitCode === 0, exitCode: bs.exitCode ?? -1 };
+}

@@ -1,7 +1,7 @@
 import { readFile, writeFile, unlink, readdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import { MUAVIN_DIR, loadJson, loadConfig } from "./utils";
+import { MUAVIN_DIR, loadJson, loadConfig, reloadService } from "./utils";
 
 export interface Job {
   id: string;
@@ -256,19 +256,8 @@ export async function syncJobPlists(): Promise<void> {
     if (existingContent !== newContent) {
       await writeFile(plistPath, newContent);
 
-      // Bootout if already loaded
       const label = `ai.muavin.job.${job.id}`;
-      await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
-        stdout: "pipe",
-        stderr: "pipe",
-      }).exited;
-
-      // Bootstrap
-      await Bun.spawn(["launchctl", "bootstrap", `gui/${uid}`, plistPath], {
-        stdout: "pipe",
-        stderr: "pipe",
-      }).exited;
-
+      await reloadService(uid, label, plistPath);
       console.log(`Synced job: ${job.id}`);
     }
   }
