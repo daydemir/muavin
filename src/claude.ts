@@ -5,6 +5,8 @@ import { join } from "path";
 
 const ALLOWED_MODELS = ["sonnet", "opus", "haiku"];
 
+export const activeChildPids = new Set<number>();
+
 function loadModelFromConfig(): string | null {
   try {
     const raw = readFileSync(join(homedir(), ".muavin", "config.json"), "utf-8");
@@ -55,6 +57,8 @@ export async function callClaude(prompt: string, opts?: {
     cwd: opts?.cwd ?? join(homedir(), ".muavin"),
   });
 
+  if (proc.pid) activeChildPids.add(proc.pid);
+
   proc.stdin.write(prompt);
   proc.stdin.end();
 
@@ -62,6 +66,8 @@ export async function callClaude(prompt: string, opts?: {
     const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
+
+    if (proc.pid) activeChildPids.delete(proc.pid);
 
     if (exitCode !== 0) {
       throw new Error(`Claude exited ${exitCode}: ${stderr}`);
@@ -88,7 +94,12 @@ export async function callClaude(prompt: string, opts?: {
   if (opts?.timeoutMs) {
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
-        proc.kill();
+        proc.kill("SIGTERM");
+        setTimeout(() => {
+          if (proc.pid && activeChildPids.has(proc.pid)) {
+            proc.kill("SIGKILL");
+          }
+        }, 5000);
         const hours = Math.floor(opts.timeoutMs! / 3600000);
         const minutes = Math.floor((opts.timeoutMs! % 3600000) / 60000);
         const parts = [];
@@ -102,6 +113,24 @@ export async function callClaude(prompt: string, opts?: {
   }
 
   return processPromise;
+}
+
+export async function killAllChildren(): Promise<void> {
+  const pids = Array.from(activeChildPids);
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  }
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  for (const pid of pids) {
+    if (activeChildPids.has(pid)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+  }
+  activeChildPids.clear();
 }
 
 // Test block — run with: bun run src/claude.ts

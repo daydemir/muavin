@@ -1,4 +1,4 @@
-import { readFile, writeFile, unlink, rename } from "fs/promises";
+import { readFile, writeFile, unlink, rename, readdir, mkdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -83,4 +83,52 @@ export function timeAgo(ts: number): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+// ── Outbox ──────────────────────────────────────────────────
+
+const OUTBOX_DIR = join(MUAVIN_DIR, "outbox");
+
+export interface OutboxItem {
+  source: "agent" | "job" | "heartbeat";
+  sourceId?: string;
+  task?: string;
+  result: string;
+  chatId: number;
+  createdAt: string;
+}
+
+export async function writeOutbox(item: OutboxItem): Promise<void> {
+  await mkdir(OUTBOX_DIR, { recursive: true });
+  const filename = `${Date.now()}_${item.source}${item.sourceId ? `_${item.sourceId}` : ""}.json`;
+  const filePath = join(OUTBOX_DIR, filename);
+  const tmpPath = `${filePath}.tmp`;
+  await writeFile(tmpPath, JSON.stringify(item, null, 2));
+  await rename(tmpPath, filePath);
+}
+
+export async function readOutbox(): Promise<Array<OutboxItem & { _filename: string }>> {
+  await mkdir(OUTBOX_DIR, { recursive: true });
+  const files = await readdir(OUTBOX_DIR);
+  const items: Array<OutboxItem & { _filename: string }> = [];
+
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      const content = await readFile(join(OUTBOX_DIR, file), "utf-8");
+      const item: OutboxItem = JSON.parse(content);
+      items.push({ ...item, _filename: file });
+    } catch {
+      // Skip and delete corrupted files
+      await unlink(join(OUTBOX_DIR, file)).catch(() => {});
+    }
+  }
+
+  return items.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+}
+
+export async function clearOutboxItems(filenames: string[]): Promise<void> {
+  for (const filename of filenames) {
+    await unlink(join(OUTBOX_DIR, filename)).catch(() => {});
+  }
 }

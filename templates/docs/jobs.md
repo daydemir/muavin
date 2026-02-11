@@ -39,6 +39,19 @@ System jobs also have `"system": true` and `"action"` (built-in handler) instead
 - Be specific about what to check, where to look, and what format to use
 - Jobs run with full tool access (web search, filesystem, APIs)
 
+## Job Output
+
+Job results are written to the outbox (`~/.muavin/outbox/`). The voice (relay) reads them and decides what to surface. Jobs should NOT send messages directly — let the voice handle formatting and delivery.
+
+If a job's output is `SKIP`, nothing is written to the outbox.
+
+### Monitoring Patterns
+
+For long-running monitoring (e.g., watching a deployment), consider:
+- A job that runs every N minutes and checks status
+- Writing meaningful results to the outbox only when state changes
+- Using SKIP aggressively when nothing has changed
+
 ## System Jobs
 
 These are infrastructure jobs — don't modify unless asked:

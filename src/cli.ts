@@ -633,7 +633,12 @@ async function installTemplates() {
   const templatesDir = `${import.meta.dir}/../templates`;
   const docsDir = `${muavinDir}/docs`;
 
+  const systemDir = `${muavinDir}/system`;
+  const outboxDir = `${muavinDir}/outbox`;
+
   await mkdir(docsDir, { recursive: true });
+  await mkdir(systemDir, { recursive: true });
+  await mkdir(outboxDir, { recursive: true });
 
   // Install CLAUDE.md (only if not exists — don't overwrite personality)
   const claudePath = `${muavinDir}/CLAUDE.md`;
@@ -669,6 +674,11 @@ async function installTemplates() {
     }
   }
   ok(`Installed docs/ (${docFiles.length} files)`);
+
+  // Install system CLAUDE.md for worker agents (always overwrite)
+  const systemClaudePath = `${systemDir}/CLAUDE.md`;
+  await Bun.write(systemClaudePath, "You are a worker agent. Be concise. Return raw results.\n");
+  ok("Installed system/CLAUDE.md");
 
   // Initialize jobs.json if not exists
   const jobsPath = `${muavinDir}/jobs.json`;
@@ -1287,6 +1297,25 @@ async function statusCommand() {
   } catch {
     dim("  Error reading agents");
   }
+
+  // Check outbox
+  console.log();
+  heading("Outbox:");
+  try {
+    const { readOutbox } = await import("./utils");
+    const items = await readOutbox();
+    if (items.length === 0) {
+      dim("  Empty");
+    } else {
+      for (const item of items) {
+        const when = timeAgo(new Date(item.createdAt).getTime());
+        const preview = item.result.slice(0, 60).replace(/\n/g, " ");
+        console.log(pc.dim(`  [${item.source}] ${item.task ?? ""} — ${when} — ${preview}...`));
+      }
+    }
+  } catch {
+    dim("  Error reading outbox");
+  }
 }
 
 function timeAgo(ts: number): string {
@@ -1342,37 +1371,7 @@ async function agentCommand() {
   const { createAgent } = await import("./agents");
   const agent = await createAgent({ task, prompt: agentPrompt, chatId });
   ok(`Created agent ${agent.id}: ${agent.task}`);
-
-  // Start runner if not already active
-  const { loadConfig, MUAVIN_DIR } = await import("./utils");
-  const config = await loadConfig();
-  const repoPath = config.repoPath;
-  if (!repoPath) {
-    warn("repoPath not set in config — cannot auto-start runner. Run: bun muavin config");
-    return;
-  }
-
-  const lockFile = `${MUAVIN_DIR}/agent-runner.lock`;
-  let runnerActive = false;
-  try {
-    const pid = parseInt(await (await import("fs/promises")).readFile(lockFile, "utf-8"));
-    process.kill(pid, 0);
-    runnerActive = true;
-  } catch {}
-
-  if (!runnerActive) {
-    const bunPath = Bun.which("bun");
-    if (bunPath) {
-      const logPath = `${process.env.HOME}/Library/Logs/muavin-agents.log`;
-      Bun.spawn([bunPath, "run", `${repoPath}/src/agent-runner.ts`, "--loop"], {
-        stdout: Bun.file(logPath),
-        stderr: Bun.file(logPath),
-      });
-      ok("Started agent runner");
-    }
-  } else {
-    dim("  Agent runner already active");
-  }
+  dim("  Relay will pick it up automatically");
 }
 
 async function testCommand() {

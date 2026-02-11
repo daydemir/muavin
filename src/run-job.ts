@@ -2,9 +2,8 @@ import { validateEnv } from "./env";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { runHealthCheck, extractMemories } from "./memory";
-import { sendTelegram } from "./telegram";
 import { cleanupAgents, buildContext } from "./agents";
-import { MUAVIN_DIR, loadConfig, loadJson, saveJson } from "./utils";
+import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox } from "./utils";
 
 validateEnv();
 
@@ -80,12 +79,28 @@ try {
     if (result.text.trim() === "SKIP") {
       console.log(`[${jobId}] SKIP`);
     } else {
-      await sendTelegram(config.owner, result.text, { parseMode: "Markdown" });
-      console.log(`[${jobId}] sent to Telegram`);
+      await writeOutbox({
+        source: "job",
+        sourceId: jobId,
+        task: job.name || jobId,
+        result: result.text,
+        chatId: config.owner,
+        createdAt: new Date().toISOString(),
+      });
+      console.log(`[${jobId}] wrote to outbox`);
     }
   }
 } catch (error) {
   console.error(`[${jobId}] error:`, error);
+  // Notify owner of job failure via outbox
+  await writeOutbox({
+    source: "job",
+    sourceId: jobId,
+    task: job.name || jobId,
+    result: `Job "${job.name || jobId}" failed: ${error instanceof Error ? error.message : String(error)}`,
+    chatId: config.owner,
+    createdAt: new Date().toISOString(),
+  }).catch(e => console.error(`[${jobId}] failed to write error to outbox:`, e));
 }
 
 // Update job-state.json

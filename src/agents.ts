@@ -1,6 +1,6 @@
 import { readFile, writeFile, readdir, mkdir, unlink, rename } from "fs/promises";
 import { join } from "path";
-import { MUAVIN_DIR, loadJson, timeAgo } from "./utils";
+import { MUAVIN_DIR, loadJson, timeAgo, readOutbox } from "./utils";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
 
@@ -38,7 +38,9 @@ export async function createAgent(opts: {
   };
 
   const filePath = join(AGENTS_DIR, `${id}.json`);
-  await writeFile(filePath, JSON.stringify(agent, null, 2));
+  const tmpPath = `${filePath}.tmp`;
+  await writeFile(tmpPath, JSON.stringify(agent, null, 2));
+  await rename(tmpPath, filePath);
 
   return agent;
 }
@@ -189,18 +191,28 @@ export async function buildContext(opts: {
   query: string;
   chatId?: number;
   recentCount?: number;
+  full?: boolean;
 }): Promise<string> {
+  const full = opts.full !== false; // default true
   const parts: string[] = [];
 
-  // 1. Read muavin.md
-  try {
-    const muavinMd = await readFile(join(MUAVIN_DIR, "muavin.md"), "utf-8");
-    parts.push(muavinMd.trim());
-  } catch {}
+  // 1. Read muavin.md (voice only)
+  if (full) {
+    try {
+      const muavinMd = await readFile(join(MUAVIN_DIR, "muavin.md"), "utf-8");
+      parts.push(muavinMd.trim());
+    } catch {}
+  }
 
-  // 2. Semantic memory search
+  // 2. Semantic memory search (with 15s timeout)
   const { searchContext } = await import("./memory");
-  const contextResults = await searchContext(opts.query, 3).catch(() => []);
+  const contextResults = await Promise.race([
+    searchContext(opts.query, 3),
+    new Promise<[]>(resolve => setTimeout(() => {
+      console.error("buildContext: Supabase search timed out (15s)");
+      resolve([]);
+    }, 15000)),
+  ]).catch(() => []);
   if (contextResults.length > 0) {
     const contextStr = contextResults
       .map((r) => `[${r.source}] ${r.content}`)
@@ -208,10 +220,16 @@ export async function buildContext(opts: {
     parts.push(`[Memory]\n${contextStr}`);
   }
 
-  // 3. Recent messages (if chatId provided)
-  if (opts.chatId && opts.recentCount) {
+  // 3. Recent messages (voice only)
+  if (full && opts.chatId && opts.recentCount) {
     const { getRecentMessages } = await import("./memory");
-    const recent = await getRecentMessages(String(opts.chatId), opts.recentCount).catch(() => []);
+    const recent = await Promise.race([
+      getRecentMessages(String(opts.chatId), opts.recentCount),
+      new Promise<[]>(resolve => setTimeout(() => {
+        console.error("buildContext: recent messages timed out (15s)");
+        resolve([]);
+      }, 15000)),
+    ]).catch(() => []);
     if (recent.length > 0) {
       const recentStr = recent
         .map((m) => `${m.role}: ${m.content}`)
@@ -220,13 +238,28 @@ export async function buildContext(opts: {
     }
   }
 
-  // 4. Agent summary
-  const agentSummary = await getAgentSummary();
-  if (agentSummary) parts.push(agentSummary);
+  // 4. Agent summary (voice only)
+  if (full) {
+    const agentSummary = await getAgentSummary();
+    if (agentSummary) parts.push(agentSummary);
+  }
 
-  // 5. Jobs summary
-  const jobsSummary = await getJobsSummary();
-  if (jobsSummary) parts.push(jobsSummary);
+  // 5. Jobs summary (voice only)
+  if (full) {
+    const jobsSummary = await getJobsSummary();
+    if (jobsSummary) parts.push(jobsSummary);
+  }
+
+  // 6. Pending outbox items (voice only)
+  if (full) {
+    const outboxItems = await readOutbox();
+    if (outboxItems.length > 0) {
+      const outboxStr = outboxItems.map(item =>
+        `[${item.source}${item.sourceId ? `:${item.sourceId}` : ""}] ${item.task ?? ""}:\n${item.result}`
+      ).join("\n\n");
+      parts.push(`[Pending Outbox Results]\n${outboxStr}`);
+    }
+  }
 
   return parts.join("\n\n");
 }
@@ -236,20 +269,20 @@ export async function cleanupAgents(maxAgeMs: number): Promise<number> {
   const now = Date.now();
   let deleted = 0;
 
-  for (const agent of agents) {
-    if (agent.status !== "completed" && agent.status !== "failed") {
-      continue;
-    }
+  const terminal = agents
+    .filter(a => a.status === "completed" || a.status === "failed")
+    .sort((a, b) => new Date(b.completedAt ?? b.createdAt).getTime() - new Date(a.completedAt ?? a.createdAt).getTime());
 
+  for (const agent of terminal) {
     const timestamp = agent.completedAt ?? agent.createdAt;
     const age = now - new Date(timestamp).getTime();
+    const overCap = (terminal.length - deleted) > 100;
 
-    if (age > maxAgeMs) {
+    if (age > maxAgeMs || overCap) {
       try {
         await unlink(join(AGENTS_DIR, `${agent.id}.json`));
         deleted++;
       } catch {
-        // Skip if file can't be deleted
         continue;
       }
     }

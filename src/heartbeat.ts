@@ -7,9 +7,10 @@ import { Bot } from "grammy";
 import { readFile, writeFile, stat, mkdir } from "fs/promises";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { sendTelegram, checkPendingAlerts } from "./telegram";
-import { listAgents } from "./agents";
+import { sendTelegram } from "./telegram";
+import { listAgents, updateAgent } from "./agents";
 import { callClaude } from "./claude";
+import { writeOutbox } from "./utils";
 
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
@@ -165,7 +166,15 @@ async function checkStuckAgents(): Promise<string | null> {
       return Date.now() - new Date(a.startedAt).getTime() > 2 * 60 * 60_000; // 2h
     });
     if (stuck.length > 0) {
-      return `${stuck.length} stuck agent(s): ${stuck.map(a => a.task).join(", ")}`;
+      // Recover stuck agents: mark as failed
+      for (const agent of stuck) {
+        await updateAgent(agent.id, {
+          status: "failed",
+          completedAt: new Date().toISOString(),
+          error: "Stuck agent recovered by heartbeat (>2h)",
+        });
+      }
+      return `Recovered ${stuck.length} stuck agent(s): ${stuck.map(a => a.task).join(", ")}`;
     }
     return null;
   } catch {
@@ -184,7 +193,6 @@ async function main() {
     checkOpenAI(),
     checkTelegram(),
     checkErrorLogs(state.lastRun),
-    checkPendingAlerts(),
     checkStuckAgents(),
   ]);
 
@@ -226,14 +234,25 @@ async function main() {
 
         if (!isDuplicate) {
           const config = await loadConfig();
-          const sent = await sendTelegram(config.owner, result.text);
-          if (sent) {
-            state.lastAlertText = result.text;
-            state.lastAlertAt = Date.now();
-            console.log("AI-triaged alert sent to Telegram");
+          const relayDown = failures.some(f => f.includes("Relay daemon not running") || f.includes("Relay lock stale"));
+
+          if (relayDown) {
+            // Relay is down — send directly via Telegram
+            await sendTelegram(config.owner, result.text);
+            console.log("Alert sent directly (relay is down)");
           } else {
-            console.error("Failed to send heartbeat alert (queued for retry)");
+            // Relay is up — write to outbox for voice processing
+            await writeOutbox({
+              source: "heartbeat",
+              task: "Health alert",
+              result: result.text,
+              chatId: config.owner,
+              createdAt: new Date().toISOString(),
+            });
+            console.log("Alert written to outbox");
           }
+          state.lastAlertText = result.text;
+          state.lastAlertAt = Date.now();
         } else {
           console.log("Alert suppressed (duplicate within 2h)");
         }
@@ -243,6 +262,7 @@ async function main() {
       console.error("AI triage failed, sending raw alert:", e);
       const alertText = `Muavin Heartbeat Alert\n\n${failures.map(f => `- ${f}`).join("\n")}`;
       const config = await loadConfig();
+      // Always send directly on triage failure (can't trust outbox if things are broken)
       await sendTelegram(config.owner, alertText);
     }
   }
