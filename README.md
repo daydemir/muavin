@@ -25,13 +25,11 @@ A personal AI assistant that runs 24/7 on your Mac and talks to you via Telegram
 ```mermaid
 flowchart TD
     You((("  You  "))) <-->|"  Telegram  "| Conductor["Conductor"]
+    Heartbeat(["Heartbeat"]) -."  monitors  ".-> Conductor
 
     Conductor --- Agents["Agents<br/><sub>long-running background tasks</sub>"]
     Conductor --- Jobs["Jobs<br/><sub>run on a schedule</sub>"]
     Conductor --- Supabase[("Supabase<br/><sub>messages · memory</sub>")]
-
-    Heartbeat(["Heartbeat"]) -."  monitors  ".-> Conductor
-    Agents ~~~ Heartbeat
 
     style You fill:#f5f5f5,stroke:#999,color:#333
     style Conductor fill:#6366f1,stroke:#4f46e5,color:#fff
