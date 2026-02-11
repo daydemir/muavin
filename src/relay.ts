@@ -125,9 +125,6 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
   }, 4000);
 
   try {
-    // Get outbox items before building context
-    const outboxItems = await readOutbox();
-
     // Build context
     const numericChatId = ctx.chat?.id ?? 0;
     const appendSystemPrompt = await buildContext({
@@ -181,11 +178,6 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     logMessage("assistant", result.text, chatId).catch(e => console.error('logMessage failed:', e));
 
     await sendResponse(ctx, result.text);
-
-    // Clear outbox items that were seen in this response
-    if (outboxItems.length > 0) {
-      await clearOutboxItems(outboxItems.map(i => i._filename));
-    }
   } catch (error) {
     console.error("Error in processUserMessage:", error);
     await ctx.reply(

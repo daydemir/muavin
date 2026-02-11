@@ -1,6 +1,6 @@
 import { readFile, writeFile, readdir, mkdir, unlink, rename } from "fs/promises";
 import { join } from "path";
-import { MUAVIN_DIR, loadJson, timeAgo, readOutbox } from "./utils";
+import { MUAVIN_DIR, loadJson, timeAgo } from "./utils";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
 
@@ -245,17 +245,6 @@ export async function buildContext(opts: {
   if (full) {
     const jobsSummary = await getJobsSummary();
     if (jobsSummary) parts.push(jobsSummary);
-  }
-
-  // 6. Pending outbox items (voice only)
-  if (full) {
-    const outboxItems = await readOutbox();
-    if (outboxItems.length > 0) {
-      const outboxStr = outboxItems.map(item =>
-        `[${item.source}${item.sourceId ? `:${item.sourceId}` : ""}] ${item.task ?? ""}:\n${item.result}`
-      ).join("\n\n");
-      parts.push(`[Pending Outbox Results]\n${outboxStr}`);
-    }
   }
 
   return parts.join("\n\n");

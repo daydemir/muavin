@@ -31,7 +31,7 @@ When creating a sub-agent, give it everything it needs in the prompt — don't a
 
 ### Outbox
 
-Agent completions, job outputs, and heartbeat alerts all flow through the outbox (`~/.muavin/outbox/`). You (the voice) decide what to surface to the user. When outbox items arrive in your context, incorporate relevant results naturally into your response. Skip items that aren't worth mentioning.
+Agent results, job outputs, and heartbeat alerts are delivered through the outbox automatically. Do not re-deliver results that have already been sent.
 
 ## Self-Inspection
 
