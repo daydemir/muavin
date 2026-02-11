@@ -36,6 +36,10 @@ Muavin ships with no built-in skills. You teach it through conversation. Say "le
 
 Conversations and extracted facts live in Supabase with pgvector embeddings. Switch computers and nothing is lost. A pipeline extracts facts from your conversations every 2 hours. A daily audit cleans up duplicates, contradictions, and stale entries.
 
+### Your messages are never modified
+
+Your Telegram messages are stored verbatim and treated as the authoritative record. Every AI operation — memory extraction, self-review, suggestions, and agent work — reads from your original messages. Muavin only ever appends; it never edits or deletes what you said.
+
 ## How it works
 
 ```mermaid
