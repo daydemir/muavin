@@ -1,13 +1,13 @@
 <div align="center">
-<h1>muavin</h1>
+<img src="assets/logo.png" alt="muavin" width="600">
 
 A personal AI assistant that improves itself every day.
 
-[![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Bun](https://img.shields.io/badge/Bun-000000?logo=bun&logoColor=white)](https://bun.sh)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-cc785c?logo=anthropic&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
-[![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?logo=telegram&logoColor=white)](https://telegram.org)
+[![macOS](https://img.shields.io/badge/macOS-0b1e28?logo=apple&logoColor=white)](https://www.apple.com/macos/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-1f8fb1.svg)](LICENSE)
+[![Bun](https://img.shields.io/badge/Bun-0b1e28?logo=bun&logoColor=white)](https://bun.sh)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-1f8fb1?logo=anthropic&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
+[![Telegram](https://img.shields.io/badge/Telegram-29cbfd?logo=telegram&logoColor=white)](https://telegram.org)
 
 </div>
 
@@ -16,7 +16,7 @@ A personal AI assistant that improves itself every day.
 
 Muavin runs on your Mac and talks to you via Telegram. It stores conversations and facts in Supabase, so your memory is always backed up and portable. Every day it reviews its own logs, fixes what it can, and suggests ways it can help.
 
-## What makes this different
+## What makes *muavin* different
 
 ### It reviews its own work
 
@@ -47,12 +47,12 @@ flowchart TD
     Conductor --- Jobs["Jobs<br/><sub>run on a schedule</sub>"]
     Conductor --- Supabase[("Supabase<br/><sub>messages · memory</sub>")]
 
-    style You fill:#f5f5f5,stroke:#999,color:#333
-    style Conductor fill:#6366f1,stroke:#4f46e5,color:#fff
-    style Agents fill:#f97316,stroke:#ea580c,color:#fff
-    style Jobs fill:#f97316,stroke:#ea580c,color:#fff
-    style Supabase fill:#22c55e,stroke:#16a34a,color:#fff
-    style Heartbeat fill:#ef4444,stroke:#dc2626,color:#fff
+    style You fill:#e8f7fc,stroke:#5adbff,color:#0b1e28
+    style Conductor fill:#1f8fb1,stroke:#164e5f,color:#fff
+    style Agents fill:#29cbfd,stroke:#1f8fb1,color:#fff
+    style Jobs fill:#29cbfd,stroke:#1f8fb1,color:#fff
+    style Supabase fill:#0b1e28,stroke:#1f8fb1,color:#fff
+    style Heartbeat fill:#164e5f,stroke:#0b1e28,color:#5adbff
 ```
 
 **Conductor** is the always-on relay. It receives your Telegram messages, manages background agents, runs scheduled jobs, and stores everything in Supabase. **Heartbeat** monitors all services and alerts you if something goes down.
