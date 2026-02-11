@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir, mkdir, unlink, rename } from "fs/promises";
+import { readFile, writeFile, readdir, mkdir, unlink, rename, stat } from "fs/promises";
 import { join } from "path";
 import { MUAVIN_DIR, loadJson, timeAgo } from "./utils";
 import type { Job } from "./jobs";
@@ -255,6 +255,30 @@ export async function cleanupAgents(maxAgeMs: number): Promise<number> {
       } catch {
         continue;
       }
+    }
+  }
+
+  return deleted;
+}
+
+export async function cleanupUploads(maxAgeMs: number): Promise<number> {
+  const uploadsDir = join(MUAVIN_DIR, "uploads");
+  await mkdir(uploadsDir, { recursive: true });
+
+  const files = await readdir(uploadsDir);
+  const now = Date.now();
+  let deleted = 0;
+
+  for (const file of files) {
+    const filePath = join(uploadsDir, file);
+    try {
+      const { mtimeMs } = await stat(filePath);
+      if (now - mtimeMs > maxAgeMs) {
+        await unlink(filePath);
+        deleted++;
+      }
+    } catch {
+      continue;
     }
   }
 

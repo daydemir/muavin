@@ -2,7 +2,7 @@ import { validateEnv } from "./env";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { runHealthCheck, extractMemories } from "./memory";
-import { cleanupAgents, buildContext } from "./agents";
+import { cleanupAgents, buildContext, cleanupUploads } from "./agents";
 import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox } from "./utils";
 import type { Job } from "./jobs";
 
@@ -46,8 +46,9 @@ try {
     const extracted = await extractMemories(job.model);
     console.log(`[${jobId}] extracted ${extracted} memories`);
   } else if (job.action === "cleanup-agents") {
-    const cleaned = await cleanupAgents(7 * 24 * 60 * 60_000);
-    console.log(`[${jobId}] cleaned ${cleaned} old agent files`);
+    const cleanedAgents = await cleanupAgents(7 * 24 * 60 * 60_000);
+    const cleanedUploads = await cleanupUploads(24 * 60 * 60_000);
+    console.log(`[${jobId}] cleaned ${cleanedAgents} old agent files, ${cleanedUploads} old uploads`);
   } else if (job.prompt) {
     const timeStr = now.toLocaleString("en-US", {
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,

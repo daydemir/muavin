@@ -536,7 +536,6 @@ bot.on("message:photo", async (ctx) => {
 
     const caption = ctx.message.caption || "Analyze this image.";
     await handleMessage(ctx, `[User sent a file: ${filePath}] ${caption}`);
-    await unlink(filePath).catch(() => {});
   } catch (error) {
     console.error("Photo error:", error);
     await ctx.reply("Could not process photo.");
@@ -559,7 +558,6 @@ bot.on("message:document", async (ctx) => {
 
     const caption = ctx.message.caption || `Analyze: ${doc.file_name}`;
     await handleMessage(ctx, `[User sent a file: ${filePath}] ${caption}`);
-    await unlink(filePath).catch(() => {});
   } catch (error) {
     console.error("Document error:", error);
     await ctx.reply("Could not process document.");

@@ -84,11 +84,15 @@ When the user's intent is ambiguous, ask: "Should this be a recurring job, a ski
 
 ## Context Files
 
+Note: Any MEMORY.md files you see are from Claude Code's session context, NOT your memory system. Your memory is Supabase only (see Memory section below).
+
 ### USER.md
 Goals, preferences, work context, relationships. Read this for personalized context. Update it when the user shares relevant personal info (new job, project, preference, relationship).
 
 ### Memory
-Memories are automatically extracted from conversations every 2h and stored in Supabase with vector embeddings. Relevant facts are injected into every session via vector search. There is no local memory file to manage — just converse naturally and facts are persisted automatically.
+Your memory is Supabase pgvector ONLY. Facts are automatically extracted from conversations every 2h and stored with vector embeddings. Relevant context is injected into every session via vector search.
+
+Do NOT create or maintain local memory files. All memory is handled automatically via Supabase. Just converse naturally — facts persist automatically.
 
 ## Diagnostics
 
