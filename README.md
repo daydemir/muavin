@@ -1,7 +1,7 @@
 <div align="center">
 <img src="assets/logo.png" alt="muavin" width="600">
 
-A personal AI assistant that improves itself every day.
+A personal AI assistant that improves itself.
 
 [![macOS](https://img.shields.io/badge/macOS-0b1e28?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-1f8fb1.svg)](LICENSE)
