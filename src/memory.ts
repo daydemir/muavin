@@ -119,7 +119,7 @@ export async function searchContext(
   return merged;
 }
 
-export async function extractMemories(): Promise<number> {
+export async function extractMemories(model?: string): Promise<number> {
   const { data: messages, error } = await supabase
     .from("messages")
     .select("id, role, content, chat_id, created_at")
@@ -154,6 +154,7 @@ export async function extractMemories(): Promise<number> {
         cwd: SYSTEM_CWD,
         maxTurns: 1,
         timeoutMs: 300000,
+        model,
       });
 
       // Mark as processed immediately (even if parsing fails)
@@ -224,7 +225,7 @@ interface HealthCheckResult {
   resolved: Array<{ stale_id: number; kept_id: number; reason: string }>;
 }
 
-export async function runHealthCheck(): Promise<void> {
+export async function runHealthCheck(model?: string): Promise<void> {
   // Fetch all non-stale memories
   const { data: memories, error } = await supabase
     .from("memory")
@@ -254,6 +255,7 @@ export async function runHealthCheck(): Promise<void> {
     cwd: SYSTEM_CWD,
     maxTurns: 1,
     timeoutMs: 300000,
+    model,
   });
   let healthResult: HealthCheckResult;
 

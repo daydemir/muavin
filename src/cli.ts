@@ -739,7 +739,7 @@ const configSections: ConfigSection[] = [
   {
     title: "Behavior",
     fields: [
-      { key: "claudeModel", label: "Claude model", source: "config", type: "select", options: ["sonnet", "opus", "haiku"] },
+      { key: "model", label: "Claude model", source: "config", type: "select", options: ["sonnet", "opus", "haiku"] },
       { key: "relayTimeoutMs", label: "Relay timeout (ms)", source: "config", type: "number" },
       { key: "relayMaxTurns", label: "Relay max turns", source: "config", type: "number" },
       { key: "jobTimeoutMs", label: "Job timeout (ms)", source: "config", type: "number" },
@@ -781,7 +781,7 @@ function getDisplayValue(field: ConfigField, env: Record<string, string>, config
 
   if (field.type === "select") {
     const value = config?.[field.key];
-    if (field.key === "claudeModel") {
+    if (field.key === "model") {
       return value ?? "sonnet";
     }
     return value ?? (field.options?.[0] ?? pc.dim("(not set)"));
@@ -847,7 +847,7 @@ async function editField(
 
   if (field.type === "select" && field.options) {
     const currentConfig = await parseConfigFile(configPath) ?? {};
-    const currentValue = currentConfig[field.key] ?? (field.key === "claudeModel" ? "sonnet" : field.options[0]);
+    const currentValue = currentConfig[field.key] ?? (field.key === "model" ? "sonnet" : field.options[0]);
     const currentIndex = field.options.indexOf(currentValue);
     const nextIndex = (currentIndex + 1) % field.options.length;
     const newValue = field.options[nextIndex];

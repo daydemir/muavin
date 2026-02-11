@@ -40,10 +40,10 @@ console.log(`[${jobId}] running...`);
 
 try {
   if (job.action === "memory-health") {
-    await runHealthCheck();
+    await runHealthCheck(job.model);
     console.log(`[${jobId}] health check complete`);
   } else if (job.action === "extract-memories") {
-    const extracted = await extractMemories();
+    const extracted = await extractMemories(job.model);
     console.log(`[${jobId}] extracted ${extracted} memories`);
   } else if (job.action === "cleanup-agents") {
     const cleaned = await cleanupAgents(7 * 24 * 60 * 60_000);
