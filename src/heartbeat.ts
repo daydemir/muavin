@@ -20,13 +20,14 @@ interface HeartbeatState {
   lastRun: number;
   lastAlertText: string;
   lastAlertAt: number;
+  consecutiveFailures: Record<string, number>;
 }
 
 async function loadState(): Promise<HeartbeatState> {
   try {
     return JSON.parse(await readFile(STATE_PATH, "utf-8"));
   } catch {
-    return { lastRun: 0, lastAlertText: "", lastAlertAt: 0 };
+    return { lastRun: 0, lastAlertText: "", lastAlertAt: 0, consecutiveFailures: {} };
   }
 }
 
@@ -182,6 +183,41 @@ async function checkStuckAgents(): Promise<string | null> {
   }
 }
 
+async function tryRestartDaemon(label: string, state: HeartbeatState): Promise<string> {
+  const { existsSync } = await import("fs");
+  const { STOPPED_MARKER, loadConfig, reloadService, getUid } = await import("./utils");
+
+  if (existsSync(STOPPED_MARKER)) return `${label}: skipped restart (intentional stop)`;
+
+  const config = await loadConfig();
+  if (config.startOnLogin === false) return `${label}: skipped restart (startOnLogin disabled)`;
+
+  const count = state.consecutiveFailures[label] ?? 0;
+  if (count >= 3) return `${label}: crash loop detected (${count} consecutive failures, giving up)`;
+
+  const uid = await getUid();
+  const plistPath = join(process.env.HOME ?? "~", "Library/LaunchAgents", `${label}.plist`);
+  const result = await reloadService(uid, label, plistPath);
+
+  if (!result.ok) {
+    state.consecutiveFailures[label] = count + 1;
+    return `${label}: restart failed (attempt ${count + 1}/3, exit ${result.exitCode})`;
+  }
+
+  await Bun.sleep(2000);
+
+  const verifyProc = Bun.spawn(["launchctl", "list", label], { stdout: "pipe", stderr: "pipe" });
+  await verifyProc.exited;
+
+  if (verifyProc.exitCode === 0) {
+    state.consecutiveFailures[label] = 0;
+    return `${label}: restarted successfully`;
+  }
+
+  state.consecutiveFailures[label] = count + 1;
+  return `${label}: restart verification failed (attempt ${count + 1}/3)`;
+}
+
 async function main() {
   const state = await loadState();
 
@@ -202,6 +238,24 @@ async function main() {
       failures.push(check.value);
     } else if (check.status === "rejected") {
       failures.push(`Check crashed: ${check.reason}`);
+    }
+  }
+
+  // Auto-restart crashed daemons
+  for (let i = 0; i < failures.length; i++) {
+    if (failures[i].includes("Relay daemon not running") || failures[i].includes("Relay lock stale")) {
+      const outcome = await tryRestartDaemon("ai.muavin.relay", state);
+      console.log(outcome);
+      failures[i] = outcome;
+    } else if (failures[i].includes("Missing job plists")) {
+      try {
+        const { syncJobPlists } = await import("./jobs");
+        await syncJobPlists();
+        failures[i] = "Job plists re-synced";
+        console.log("Job plists re-synced");
+      } catch (e) {
+        failures[i] = `Job plist sync failed: ${e instanceof Error ? e.message : e}`;
+      }
     }
   }
 

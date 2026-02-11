@@ -997,7 +997,8 @@ async function configCommand() {
 
 async function stopCommand() {
   heading("Stopping Muavin daemons...\n");
-  const { waitForUnload } = await import("./utils");
+  const { waitForUnload, STOPPED_MARKER } = await import("./utils");
+  await Bun.write(STOPPED_MARKER, "");
 
   const uidProc = Bun.spawn(["id", "-u"], { stdout: "pipe" });
   const uid = (await new Response(uidProc.stdout).text()).trim();
@@ -1062,7 +1063,9 @@ async function stopCommand() {
 
 async function deployCommand() {
   heading("Deploying...\n");
-  const { reloadService } = await import("./utils");
+  const { reloadService, STOPPED_MARKER } = await import("./utils");
+  const { unlink: unlinkFile } = await import("fs/promises");
+  await unlinkFile(STOPPED_MARKER).catch(() => {});
 
   const homeDir = process.env.HOME!;
 

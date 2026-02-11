@@ -3,6 +3,12 @@ import { join } from "path";
 import { homedir } from "os";
 
 export const MUAVIN_DIR = join(homedir(), ".muavin");
+export const STOPPED_MARKER = join(MUAVIN_DIR, "stopped");
+
+export async function getUid(): Promise<string> {
+  const proc = Bun.spawn(["id", "-u"], { stdout: "pipe" });
+  return (await new Response(proc.stdout).text()).trim();
+}
 
 export interface Config {
   owner: number;
