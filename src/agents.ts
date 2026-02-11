@@ -197,15 +197,29 @@ export async function buildContext(opts: {
     } catch {}
   }
 
-  // 2. Semantic memory search (with 15s timeout)
-  const { searchContext } = await import("./memory");
-  const contextResults = await Promise.race([
-    searchContext(opts.query, 3),
-    new Promise<[]>(resolve => setTimeout(() => {
-      console.error("buildContext: Supabase search timed out (15s)");
-      resolve([]);
-    }, 15000)),
-  ]).catch(() => []);
+  // 2 & 3. Semantic search + recent messages in parallel (15s timeout each)
+  const { searchContext, getRecentMessages } = await import("./memory");
+
+  const [contextResults, recent] = await Promise.all([
+    Promise.race([
+      searchContext(opts.query, 3),
+      new Promise<[]>(resolve => setTimeout(() => {
+        console.error("buildContext: Supabase search timed out (15s)");
+        resolve([]);
+      }, 15000)),
+    ]).catch(() => []),
+
+    (full && opts.chatId && opts.recentCount)
+      ? Promise.race([
+          getRecentMessages(String(opts.chatId), opts.recentCount),
+          new Promise<[]>(resolve => setTimeout(() => {
+            console.error("buildContext: recent messages timed out (15s)");
+            resolve([]);
+          }, 15000)),
+        ]).catch(() => [])
+      : Promise.resolve([]),
+  ]);
+
   if (contextResults.length > 0) {
     const contextStr = contextResults
       .map((r) => `[${r.source}] ${r.content}`)
@@ -213,22 +227,11 @@ export async function buildContext(opts: {
     parts.push(`[Memory]\n${contextStr}`);
   }
 
-  // 3. Recent messages (voice only)
-  if (full && opts.chatId && opts.recentCount) {
-    const { getRecentMessages } = await import("./memory");
-    const recent = await Promise.race([
-      getRecentMessages(String(opts.chatId), opts.recentCount),
-      new Promise<[]>(resolve => setTimeout(() => {
-        console.error("buildContext: recent messages timed out (15s)");
-        resolve([]);
-      }, 15000)),
-    ]).catch(() => []);
-    if (recent.length > 0) {
-      const recentStr = recent
-        .map((m) => `${m.role}: ${m.content}`)
-        .join("\n");
-      parts.push(`[Recent Messages]\n${recentStr}`);
-    }
+  if (recent.length > 0) {
+    const recentStr = recent
+      .map((m) => `${m.role}: ${m.content}`)
+      .join("\n");
+    parts.push(`[Recent Messages]\n${recentStr}`);
   }
 
   // 4. Agent summary (voice only)

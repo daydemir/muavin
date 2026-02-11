@@ -11,11 +11,13 @@
     "build": "bun build --compile src/relay.ts --outfile dist/muavin-relay && bun build --compile src/heartbeat.ts --outfile dist/muavin-heartbeat && bun build --compile src/run-job.ts --outfile dist/muavin-run-job && codesign --force --sign - --identifier ai.muavin.relay dist/muavin-relay && codesign --force --sign - --identifier ai.muavin.heartbeat dist/muavin-heartbeat && codesign --force --sign - --identifier ai.muavin.run-job dist/muavin-run-job"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@supabase/supabase-js": "^2.45.0",
     "croner": "^10.0.1",
     "grammy": "^1.21.1",
     "openai": "^4.73.0",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/bun": "latest",

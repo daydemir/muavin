@@ -106,13 +106,16 @@ export async function searchContext(
   limit = 5,
 ): Promise<Array<{ content: string; source: string; similarity: number }>> {
   const queryEmbedding = await embed(query);
-  const memoryResults = await searchMemoryOnly(queryEmbedding, 0.7, limit);
+
+  const [memoryResults, messageResults] = await Promise.all([
+    searchMemoryOnly(queryEmbedding, 0.7, limit),
+    searchMessagesOnly(queryEmbedding, 0.75, limit),
+  ]);
 
   if (isGoodEnough(memoryResults, limit)) {
     return memoryResults;
   }
 
-  const messageResults = await searchMessagesOnly(queryEmbedding, 0.75, limit);
   const merged = [...memoryResults, ...messageResults]
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, limit);
