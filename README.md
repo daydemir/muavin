@@ -12,7 +12,7 @@ A personal AI assistant that improves itself.
 </div>
 
 > [!WARNING]
-> **This is experimental, early-stage software.** Muavin uses Claude Code under the hood. It can execute arbitrary shell commands, read and write files anywhere on your filesystem, and make network requests. It also consumes significant Claude Code API tokens, especially with background jobs and agents running daily. Use at your own risk.
+> **This is experimental, early-stage software.** Muavin uses Claude Code under the hood. It can execute arbitrary shell commands, read and write files anywhere on your filesystem, and make network requests. It requires [Claude Code Safety Net](https://github.com/nicobailon/claude-code-safety-net) but Claude can still perform destructive actions. It also consumes significant Claude Code API tokens, especially with background jobs and agents running daily. Use at your own risk.
 
 Muavin runs on your Mac and talks to you via Telegram. It stores conversations and facts in Supabase, so your memory is always backed up and portable. Every day it reviews its own logs, fixes what it can, and suggests ways it can help.
 
@@ -140,6 +140,7 @@ bun muavin test      # Run smoke tests
 - [Grammy](https://grammy.dev) - Telegram bot framework
 - [Supabase](https://supabase.com) - pgvector for memory
 - [Croner](https://github.com/hexagon/croner) - cron expression parsing (for status display)
+- [Claude Code Safety Net](https://github.com/nicobailon/claude-code-safety-net) - hooks-based safety guardrails for Claude Code
 - Inspired by [OpenClaw](https://github.com/openclaw/openclaw), [godagoo/claude-telegram-relay](https://github.com/godagoo/claude-telegram-relay), and [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
 
 ## License
