@@ -994,7 +994,7 @@ async function stopCommand() {
   const uidProc = Bun.spawn(["id", "-u"], { stdout: "pipe" });
   const uid = (await new Response(uidProc.stdout).text()).trim();
 
-  const labels = ["ai.muavin.relay", "ai.muavin.heartbeat"];
+  const labels = ["ai.muavin.relay", "ai.muavin.heartbeat", "ai.muavin.cron"];
 
   for (const label of labels) {
     const proc = Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
@@ -1111,7 +1111,7 @@ async function deployCommand() {
     ]);
     await bootstrapProc.exited;
 
-    if (bootstrapProc.exitCode === 0) {
+    if (bootstrapProc.exitCode === 0 || bootstrapProc.exitCode === 5) {
       ok(`Loaded ${label}`);
     } else {
       fail(`Failed to load ${label}`);
