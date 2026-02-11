@@ -4,7 +4,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { sendTelegram } from "./telegram";
-import { logMessage, searchContext } from "./memory";
+import { logMessage, searchContext, getRecentMessages } from "./memory";
 import {
   getAgent,
   updateAgent,
@@ -77,7 +77,8 @@ try {
 
 const config = JSON.parse(await readFile(configPath, "utf-8"));
 const agentMaxTurns = config.maxTurns ?? 100;
-const agentTimeoutMs = config.agentTimeoutMs ?? 600000;
+const agentTimeoutMs = config.agentTimeoutMs ?? 3600000;
+const recentMessageCount = config.recentMessageCount ?? 20;
 
 // ── Core logic ──────────────────────────────────────────────────
 
@@ -141,7 +142,7 @@ async function processAgents(): Promise<boolean> {
       });
 
       // Execute the agent prompt
-      const appendSystemPrompt = await buildContext({ query: agent.task });
+      const appendSystemPrompt = await buildContext({ query: agent.task, chatId: agent.chatId, recentCount: recentMessageCount });
       const result = await callClaude(agent.prompt, {
         noSessionPersistence: true,
         timeoutMs: agentTimeoutMs,
@@ -161,11 +162,15 @@ async function processAgents(): Promise<boolean> {
       });
 
       // Deliver via stateless Claude
-      const recentMessages = await searchContext(agent.task, 5).catch(() => []);
+      const recentMessages = await getRecentMessages(String(agent.chatId), recentMessageCount).catch(() => []);
+      const semanticResults = await searchContext(agent.task, 5).catch(() => []);
 
       const contextStr =
-        recentMessages.length > 0
-          ? recentMessages.map((r) => `[${r.source}] ${r.content}`).join("\n")
+        recentMessages.length > 0 || semanticResults.length > 0
+          ? [
+              ...recentMessages.map((m) => `[${m.role}] ${m.content}`),
+              ...semanticResults.map((r) => `[${r.source}] ${r.content}`),
+            ].join("\n")
           : "No recent context found.";
 
       const promptsDir = join(process.env.HOME ?? "~", ".muavin", "prompts");
