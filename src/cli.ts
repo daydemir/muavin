@@ -1377,20 +1377,30 @@ async function agentCommand() {
 async function testCommand() {
   heading("Running smoke tests...\n");
 
+  const { validateEnv } = await import("./env");
+  validateEnv();
+
   // Test memory
   heading("Testing memory...");
+  let supabase: any;
   try {
-    const { logMessage, searchContext, supabase } = await import("./memory");
-    await logMessage("user", "cli-test", "test");
-    const results = await searchContext("cli-test");
+    const mem = await import("./memory");
+    supabase = mem.supabase;
+    await mem.logMessage("user", "cli-test", "test");
+    const results = await mem.searchContext("cli-test");
     if (results.length > 0) {
       ok("Memory round-trip successful");
     } else {
       fail("Memory search returned no results");
     }
-    await supabase.from("messages").delete().eq("chat_id", "test").eq("content", "cli-test");
   } catch (error) {
     fail(`Memory test failed: ${error}`);
+  } finally {
+    try {
+      if (supabase) await supabase.from("messages").delete().eq("chat_id", "test").eq("content", "cli-test");
+    } catch (e) {
+      warn(`Memory cleanup failed: ${e}`);
+    }
   }
 
   // Test Telegram
