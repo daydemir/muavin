@@ -49,9 +49,6 @@ try {
     const cleanedAgents = await cleanupAgents(7 * 24 * 60 * 60_000);
     const cleanedUploads = await cleanupUploads(24 * 60 * 60_000);
     console.log(`[${jobId}] cleaned ${cleanedAgents} old agent files, ${cleanedUploads} old uploads`);
-  } else if (job.action === "auto-safe") {
-    const { runAutoSafe } = await import("./auto-safe");
-    await runAutoSafe(job, config);
   } else if (job.prompt) {
     const timeStr = formatLocalTime(now);
     const fullPrompt = `[Job: ${jobId}] Time: ${timeStr}\n\n${job.prompt}`;

@@ -1,6 +1,7 @@
 import { readFile, writeFile, unlink, rename, readdir, mkdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
+import { spawn } from "bun";
 
 export const MUAVIN_DIR = join(homedir(), ".muavin");
 export const STOPPED_MARKER = join(MUAVIN_DIR, "stopped");
@@ -168,6 +169,30 @@ export async function clearOutboxItems(filenames: string[]): Promise<void> {
   for (const filename of filenames) {
     await unlink(join(OUTBOX_DIR, filename)).catch(() => {});
   }
+}
+
+// ── Shell helpers ───────────────────────────────────────────
+
+export async function execCmd(cmd: string[], cwd: string): Promise<void> {
+  const proc = spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`${cmd.join(" ")} failed (${exitCode}): ${stderr}`);
+  }
+}
+
+export async function execCapture(
+  cmd: string[],
+  cwd: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
 }
 
 // ── Launchd helpers ─────────────────────────────────────────
