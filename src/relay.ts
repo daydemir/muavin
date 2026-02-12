@@ -572,7 +572,7 @@ bot.on("message:voice", async (ctx) => {
 // ── Response chunking ───────────────────────────────────────
 
 async function sendChunk(ctx: Context, text: string): Promise<void> {
-  text = toTelegramMarkdown(text);
+  // text is already markdown-formatted from sendResponse
   try {
     await ctx.reply(text, { parse_mode: "Markdown" });
   } catch (e: any) {
@@ -586,13 +586,15 @@ async function sendChunk(ctx: Context, text: string): Promise<void> {
 }
 
 async function sendResponse(ctx: Context, response: string): Promise<void> {
+  // Apply markdown conversion before chunking to avoid splitting mid-escape or mid-code-block
+  const formatted = toTelegramMarkdown(response);
   const MAX = 4000;
-  if (response.length <= MAX) {
-    await sendChunk(ctx, response);
+  if (formatted.length <= MAX) {
+    await sendChunk(ctx, formatted);
     return;
   }
 
-  let remaining = response;
+  let remaining = formatted;
   while (remaining.length > 0) {
     if (remaining.length <= MAX) {
       await sendChunk(ctx, remaining);
