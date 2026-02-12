@@ -4,6 +4,7 @@ import { MUAVIN_DIR, loadJson, timeAgo } from "./utils";
 import type { Job } from "./jobs";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
+const SUPABASE_TIMEOUT_MS = 15_000;
 
 export interface AgentFile {
   id: string;
@@ -190,7 +191,7 @@ export async function buildContext(opts: {
         console.error("buildContext: Supabase search timed out (15s)");
         searchAbort.abort();
         resolve([]);
-      }, 15000)),
+      }, SUPABASE_TIMEOUT_MS)),
     ]).catch(() => []),
 
     (full && opts.chatId && opts.recentCount)
@@ -200,10 +201,18 @@ export async function buildContext(opts: {
             console.error("buildContext: recent messages timed out (15s)");
             recentAbort.abort();
             resolve([]);
-          }, 15000)),
+          }, SUPABASE_TIMEOUT_MS)),
         ]).catch(() => [])
       : Promise.resolve([]),
   ]);
+
+  if (searchAbort.signal.aborted || recentAbort.signal.aborted) {
+    const missing = [
+      searchAbort.signal.aborted && "memory search",
+      recentAbort.signal.aborted && "recent messages",
+    ].filter(Boolean).join(" and ");
+    parts.push(`[System Warning] ${missing} timed out — you are responding without full context. Be helpful but note if unsure about recent context.`);
+  }
 
   if (contextResults.length > 0) {
     const contextStr = contextResults

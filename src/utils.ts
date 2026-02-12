@@ -153,7 +153,7 @@ export async function clearOutboxItems(filenames: string[]): Promise<void> {
 
 // ── Launchd helpers ─────────────────────────────────────────
 
-export async function waitForUnload(label: string, timeoutMs = 3000): Promise<boolean> {
+export async function waitForUnload(label: string, timeoutMs = 10000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const p = Bun.spawn(["launchctl", "list", label], { stdout: "pipe", stderr: "pipe" });

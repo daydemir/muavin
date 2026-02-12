@@ -32,5 +32,7 @@
     <string>Interactive</string>
     <key>ThrottleInterval</key>
     <integer>10</integer>
+    <key>ExitTimeOut</key>
+    <integer>15</integer>
 </dict>
 </plist>

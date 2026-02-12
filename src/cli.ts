@@ -1081,6 +1081,8 @@ async function deployCommand() {
 
   const config = await parseConfigFile(`${homeDir}/.muavin/config.json`) ?? {};
 
+  await installTemplates();
+
   const repoRoot = resolve(import.meta.dir, "..");
   const bunPath = Bun.which("bun");
   if (!bunPath) {

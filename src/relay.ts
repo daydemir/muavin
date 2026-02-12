@@ -177,7 +177,11 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
     logMessage("assistant", result.text, chatId).catch(e => console.error('logMessage failed:', e));
 
-    await sendResponse(ctx, result.text);
+    if (!result.text.trim()) {
+      await ctx.reply("Done.");
+    } else {
+      await sendResponse(ctx, result.text);
+    }
   } catch (error) {
     console.error("Error in processUserMessage:", error);
     const errorMsg = `Error: ${error instanceof Error ? error.message : "Unknown error"}`;
@@ -230,10 +234,10 @@ async function processOutbox(): Promise<void> {
     const success = await sendAndLog(config.owner, result.text, { parseMode: "Markdown" });
     if (success) {
       console.log(timestamp("relay"), `Delivered ${outboxItems.length} outbox item(s) to owner`);
+      await clearOutboxItems(outboxItems.map(i => i._filename));
+    } else {
+      console.error(timestamp("relay"), `Outbox delivery failed, ${outboxItems.length} item(s) will retry`);
     }
-
-    // Clear outbox items
-    await clearOutboxItems(outboxItems.map(i => i._filename));
   } catch (error) {
     console.error(timestamp("relay"), "Error in processOutbox:", error);
   }
@@ -446,6 +450,11 @@ const agentCheckInterval = setInterval(() => {
   checkRunningAgents().catch(e => console.error("checkRunningAgents error:", e));
 }, 30000);
 
+const outboxCheckInterval = setInterval(() => {
+  outboxQueue.push("check");
+  scheduleQueue();
+}, 30000);
+
 // Check pending agents once at startup
 checkPendingAgents().catch(e => console.error("checkPendingAgents error:", e));
 
@@ -595,9 +604,6 @@ async function sendChunk(ctx: Context, text: string): Promise<void> {
 }
 
 async function sendResponse(ctx: Context, response: string): Promise<void> {
-  if (!response.trim()) {
-    throw new Error("Claude returned an empty response");
-  }
   const MAX = 4000;
   if (response.length <= MAX) {
     await sendChunk(ctx, response);
@@ -625,9 +631,14 @@ async function sendResponse(ctx: Context, response: string): Promise<void> {
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
     console.log(`Received ${sig}, shutting down...`);
+    setTimeout(() => {
+      console.error("Shutdown timed out, forcing exit");
+      process.exit(1);
+    }, 8000).unref();
 
     // Stop intervals and watchers
     clearInterval(agentCheckInterval);
+    clearInterval(outboxCheckInterval);
     outboxWatcher.close();
     agentWatcher.close();
 

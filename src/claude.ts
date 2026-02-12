@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { join } from "path";
 
 const ALLOWED_MODELS = ["sonnet", "opus", "haiku"];
+const KILL_GRACE_MS = 2000;
 
 export const activeChildPids = new Set<number>();
 
@@ -103,7 +104,7 @@ export async function callClaude(prompt: string, opts?: {
           if (proc.pid && activeChildPids.has(proc.pid)) {
             proc.kill("SIGKILL");
           }
-        }, 5000);
+        }, KILL_GRACE_MS);
         const hours = Math.floor(opts.timeoutMs! / 3600000);
         const minutes = Math.floor((opts.timeoutMs! % 3600000) / 60000);
         const parts = [];
@@ -126,7 +127,7 @@ export async function killAllChildren(): Promise<void> {
       process.kill(pid, "SIGTERM");
     } catch {}
   }
-  await new Promise(resolve => setTimeout(resolve, 5000));
+  await new Promise(resolve => setTimeout(resolve, KILL_GRACE_MS));
   for (const pid of pids) {
     if (activeChildPids.has(pid)) {
       try {
