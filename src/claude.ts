@@ -29,6 +29,7 @@ export interface ClaudeResult {
   sessionId: string;
   costUsd: number;
   durationMs: number;
+  structuredOutput?: unknown;
 }
 
 export async function callClaude(prompt: string, opts?: {
@@ -40,6 +41,7 @@ export async function callClaude(prompt: string, opts?: {
   cwd?: string;
   disallowedTools?: string[];
   model?: string;
+  jsonSchema?: object;
 }): Promise<ClaudeResult> {
   const args = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"];
 
@@ -53,6 +55,7 @@ export async function callClaude(prompt: string, opts?: {
   if (opts?.noSessionPersistence) args.push("--no-session-persistence");
   if (opts?.maxTurns) args.push("--max-turns", String(opts.maxTurns));
   if (opts?.disallowedTools?.length) args.push("--disallowed-tools", ...opts.disallowedTools);
+  if (opts?.jsonSchema) args.push("--json-schema", JSON.stringify(opts.jsonSchema));
 
   const proc = spawn(args, {
     stdout: "pipe",
@@ -91,6 +94,7 @@ export async function callClaude(prompt: string, opts?: {
       sessionId: parsed.session_id ?? "",
       costUsd: parsed.total_cost_usd ?? 0,
       durationMs: parsed.duration_ms ?? 0,
+      structuredOutput: parsed.structured_output,
     };
 
     return result;

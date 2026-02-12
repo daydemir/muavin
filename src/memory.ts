@@ -10,6 +10,26 @@ import { MUAVIN_DIR, loadConfig } from "./utils";
 const SYSTEM_CWD = join(MUAVIN_DIR, "system");
 const PROMPTS_DIR = join(MUAVIN_DIR, "prompts");
 
+const MEMORY_SCHEMA = {
+  type: "object",
+  properties: {
+    memories: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          type: { type: "string" },
+          content: { type: "string" }
+        },
+        required: ["type", "content"],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ["memories"],
+  additionalProperties: false
+};
+
 function extractJSON(text: string): string {
   const match = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
   if (match) return match[1].trim();
@@ -143,18 +163,19 @@ export async function extractMemories(model?: string): Promise<number> {
         maxTurns: 1,
         timeoutMs: 300000,
         model,
+        jsonSchema: MEMORY_SCHEMA,
       });
 
       // Mark as processed immediately (even if parsing fails)
       processedIds.push(...msgs.map(m => m.id));
 
-      let facts: Array<{ type: string; content: string }>;
-      try {
-        facts = JSON.parse(extractJSON(result.text));
-      } catch {
-        console.error("extractMemories: failed to parse Claude response for chat", chatId, "response:", result.text.slice(0, 200));
+      if (!result.structuredOutput) {
+        console.error("extractMemories: no structuredOutput for chat", chatId, "— skipping (may be unsupported CLI version)");
         continue;
       }
+
+      const parsed = result.structuredOutput as { memories: Array<{ type: string; content: string }> };
+      const facts = parsed.memories;
 
       if (!Array.isArray(facts)) continue;
 

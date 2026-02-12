@@ -1290,7 +1290,7 @@ async function statusCommand() {
           console.log(pc.dim(`  ${pc.cyan("running")}   ${a.task}${modelTag} (started ${elapsed})`));
         }
       }
-      const recentCompleted = completed.slice(-5);
+      const recentCompleted = completed.slice(-5).reverse();
       if (recentCompleted.length > 0) {
         for (const a of recentCompleted) {
           const when = a.completedAt ? timeAgo(new Date(a.completedAt).getTime()) : "?";
@@ -1298,7 +1298,7 @@ async function statusCommand() {
           console.log(pc.dim(`  ${pc.green("done")}      ${a.task}${modelTag} (${when})`));
         }
       }
-      const recentFailed = failed.slice(-3);
+      const recentFailed = failed.slice(-3).reverse();
       if (recentFailed.length > 0) {
         for (const a of recentFailed) {
           const when = a.completedAt ? timeAgo(new Date(a.completedAt).getTime()) : "?";
