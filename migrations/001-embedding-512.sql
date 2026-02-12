@@ -1,32 +1,14 @@
-CREATE EXTENSION IF NOT EXISTS vector;
+BEGIN;
 
-CREATE TABLE messages (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-  content TEXT NOT NULL,
-  chat_id TEXT NOT NULL,
-  embedding VECTOR(512),
-  extracted_at TIMESTAMPTZ DEFAULT NULL
-);
-CREATE INDEX idx_messages_chat ON messages(chat_id, created_at DESC);
-CREATE INDEX idx_messages_unextracted ON messages(extracted_at) WHERE extracted_at IS NULL;
+-- NULL out existing embeddings (384-dim, incompatible with 512)
+UPDATE messages SET embedding = NULL WHERE embedding IS NOT NULL;
+UPDATE memory SET embedding = NULL WHERE embedding IS NOT NULL;
 
-CREATE TABLE memory (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  type TEXT NOT NULL CHECK (type IN ('personal_fact', 'preference', 'goal', 'relationship', 'context')),
-  content TEXT NOT NULL,
-  source TEXT DEFAULT 'memory_md',
-  stale BOOLEAN DEFAULT FALSE,
-  embedding VECTOR(512),
-  source_chat_id TEXT DEFAULT NULL,
-  source_date TIMESTAMPTZ DEFAULT NULL
-);
-CREATE INDEX idx_memory_type ON memory(type);
-CREATE INDEX idx_memory_stale ON memory(stale);
+-- Alter column types
+ALTER TABLE messages ALTER COLUMN embedding TYPE VECTOR(512);
+ALTER TABLE memory ALTER COLUMN embedding TYPE VECTOR(512);
 
+-- Recreate RPC functions with VECTOR(512) parameter types
 CREATE OR REPLACE FUNCTION search_context(
   query_embedding VECTOR(512),
   match_threshold FLOAT DEFAULT 0.7,
@@ -43,7 +25,6 @@ AS $$
   LIMIT match_count;
 $$ LANGUAGE sql;
 
--- search_memory: memory table only
 CREATE OR REPLACE FUNCTION search_memory(
   query_embedding VECTOR(512),
   match_threshold FLOAT DEFAULT 0.7,
@@ -55,7 +36,6 @@ CREATE OR REPLACE FUNCTION search_memory(
   ORDER BY similarity DESC LIMIT match_count;
 $$ LANGUAGE sql;
 
--- search_messages: messages table only
 CREATE OR REPLACE FUNCTION search_messages(
   query_embedding VECTOR(512),
   match_threshold FLOAT DEFAULT 0.7,
@@ -67,10 +47,4 @@ CREATE OR REPLACE FUNCTION search_messages(
   ORDER BY similarity DESC LIMIT match_count;
 $$ LANGUAGE sql;
 
--- ── Migration for existing databases ──────────────────────────
--- Run these ALTER statements on an existing database:
---
--- ALTER TABLE messages ADD COLUMN IF NOT EXISTS extracted_at TIMESTAMPTZ DEFAULT NULL;
--- CREATE INDEX IF NOT EXISTS idx_messages_unextracted ON messages(extracted_at) WHERE extracted_at IS NULL;
--- ALTER TABLE memory ADD COLUMN IF NOT EXISTS source_chat_id TEXT DEFAULT NULL;
--- ALTER TABLE memory ADD COLUMN IF NOT EXISTS source_date TIMESTAMPTZ DEFAULT NULL;
+COMMIT;

@@ -2,7 +2,6 @@ import { validateEnv } from "./env";
 validateEnv();
 
 import { createClient } from "@supabase/supabase-js";
-import OpenAI from "openai";
 import { Bot } from "grammy";
 import { readFile, writeFile, stat, mkdir } from "fs/promises";
 import { readFileSync } from "fs";
@@ -12,6 +11,7 @@ import { sendTelegram } from "./telegram";
 import { listAgents, updateAgent } from "./agents";
 import { callClaude } from "./claude";
 import { MUAVIN_DIR, loadConfig, writeOutbox, isSkipResponse, isPidAlive } from "./utils";
+import { EMBEDDING_DIMS, EMBEDDING_MODEL } from "./constants";
 
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
 
@@ -104,12 +104,15 @@ async function checkSupabase(): Promise<string | null> {
 
 async function checkOpenAI(): Promise<string | null> {
   try {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-    await openai.embeddings.create({
-      model: "text-embedding-3-small",
-      input: "heartbeat",
-      dimensions: 1536,
+    const res = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: EMBEDDING_MODEL, input: "heartbeat", dimensions: EMBEDDING_DIMS }),
     });
+    if (!res.ok) throw new Error(`OpenAI API error: ${res.status}`);
     return null;
   } catch (e) {
     return `OpenAI unreachable: ${e instanceof Error ? e.message : String(e)}`;

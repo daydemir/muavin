@@ -7,6 +7,7 @@ import { readFile, mkdir } from "fs/promises";
 import pc from "picocolors";
 import { listAgents } from "./agents";
 import { seedDefaultJobs, type Job } from "./jobs";
+import { EMBEDDING_DIMS, EMBEDDING_MODEL } from "./constants";
 
 const ok = (msg: string) => console.log(pc.green(`✓ ${msg}`));
 const fail = (msg: string) => console.error(pc.red(`✗ ${msg}`));
@@ -235,8 +236,9 @@ async function checkExistingOpenAI(
   try {
     const openai = new OpenAI({ apiKey: key });
     await openai.embeddings.create({
-      model: "text-embedding-3-small",
+      model: EMBEDDING_MODEL,
       input: "test",
+      dimensions: EMBEDDING_DIMS,
     });
     ok("OpenAI already configured\n");
     return key;
@@ -418,8 +420,9 @@ async function setupOpenAI(): Promise<string | null> {
   try {
     const openai = new OpenAI({ apiKey: key });
     await openai.embeddings.create({
-      model: "text-embedding-3-small",
+      model: EMBEDDING_MODEL,
       input: "test",
+      dimensions: EMBEDDING_DIMS,
     });
     ok("OpenAI API verified\n");
     return key;
@@ -531,8 +534,9 @@ async function verifyAll(): Promise<boolean> {
   try {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
     await openai.embeddings.create({
-      model: "text-embedding-3-small",
+      model: EMBEDDING_MODEL,
       input: "test",
+      dimensions: EMBEDDING_DIMS,
     });
     ok("OpenAI API verified");
   } catch (error) {
@@ -914,7 +918,7 @@ async function editField(
   if (field.key === "OPENAI_API_KEY") {
     try {
       const openai = new OpenAI({ apiKey: newValue });
-      await openai.embeddings.create({ model: "text-embedding-3-small", input: "test" });
+      await openai.embeddings.create({ model: EMBEDDING_MODEL, input: "test", dimensions: EMBEDDING_DIMS });
       ok("OpenAI API verified");
     } catch {
       fail("Invalid OpenAI API key");
