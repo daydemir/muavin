@@ -88,6 +88,10 @@ export function timestamp(prefix: string): string {
   return `[${prefix} ${new Date().toISOString()}]`;
 }
 
+/** Check if an AI response signals SKIP (may include explanation before "SKIP") */
+export const isSkipResponse = (text: string): boolean =>
+  text.trim().toUpperCase().endsWith("SKIP");
+
 export function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60_000);

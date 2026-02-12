@@ -7,7 +7,7 @@ import { callClaude, killAllChildren } from "./claude";
 import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
-import { acquireLock, releaseLock, MUAVIN_DIR, writeOutbox, readOutbox, clearOutboxItems, timestamp } from "./utils";
+import { acquireLock, releaseLock, MUAVIN_DIR, writeOutbox, readOutbox, clearOutboxItems, timestamp, isSkipResponse } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
 
 validateEnv();
@@ -180,9 +180,11 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     await sendResponse(ctx, result.text);
   } catch (error) {
     console.error("Error in processUserMessage:", error);
-    await ctx.reply(
-      `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
-    );
+    const errorMsg = `Error: ${error instanceof Error ? error.message : "Unknown error"}`;
+    const chatId = String(ctx.chat?.id ?? "");
+    logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
+    logMessage("assistant", errorMsg, chatId).catch(e => console.error('logMessage failed:', e));
+    await ctx.reply(errorMsg);
   } finally {
     clearInterval(typingInterval);
   }
@@ -218,7 +220,7 @@ async function processOutbox(): Promise<void> {
     });
 
     // Check if Claude wants to skip
-    if (result.text.trim() === "SKIP") {
+    if (isSkipResponse(result.text)) {
       console.log(timestamp("relay"), "Outbox delivery skipped by voice");
       await clearOutboxItems(outboxItems.map(i => i._filename));
       return;
@@ -539,6 +541,8 @@ bot.on("message:photo", async (ctx) => {
   } catch (error) {
     console.error("Photo error:", error);
     await ctx.reply("Could not process photo.");
+    const chatId = String(ctx.chat?.id ?? "");
+    logMessage("assistant", "Could not process photo.", chatId).catch(e => console.error('logMessage failed:', e));
   }
 });
 
@@ -561,6 +565,8 @@ bot.on("message:document", async (ctx) => {
   } catch (error) {
     console.error("Document error:", error);
     await ctx.reply("Could not process document.");
+    const chatId = String(ctx.chat?.id ?? "");
+    logMessage("assistant", "Could not process document.", chatId).catch(e => console.error('logMessage failed:', e));
   }
 });
 

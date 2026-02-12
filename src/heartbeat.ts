@@ -10,7 +10,7 @@ import { join } from "path";
 import { sendTelegram } from "./telegram";
 import { listAgents, updateAgent } from "./agents";
 import { callClaude } from "./claude";
-import { writeOutbox } from "./utils";
+import { writeOutbox, isSkipResponse } from "./utils";
 
 const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
@@ -20,6 +20,7 @@ interface HeartbeatState {
   lastRun: number;
   lastAlertText: string;
   lastAlertAt: number;
+  lastFailuresHash: string;
   consecutiveFailures: Record<string, number>;
 }
 
@@ -27,7 +28,7 @@ async function loadState(): Promise<HeartbeatState> {
   try {
     return JSON.parse(await readFile(STATE_PATH, "utf-8"));
   } catch {
-    return { lastRun: 0, lastAlertText: "", lastAlertAt: 0, consecutiveFailures: {} };
+    return { lastRun: 0, lastAlertText: "", lastAlertAt: 0, lastFailuresHash: "", consecutiveFailures: {} };
   }
 }
 
@@ -280,10 +281,11 @@ async function main() {
         timeoutMs: 120000,
       });
 
-      if (result.text.trim() === "SKIP") {
+      if (isSkipResponse(result.text)) {
         console.log("AI triage: SKIP (not worth alerting)");
       } else {
-        const isDuplicate = result.text === state.lastAlertText &&
+        const failuresHash = [...failures].sort().join("|");
+        const isDuplicate = failuresHash === state.lastFailuresHash &&
           (Date.now() - state.lastAlertAt) < 2 * 60 * 60_000;
 
         if (!isDuplicate) {
@@ -307,6 +309,7 @@ async function main() {
           }
           state.lastAlertText = result.text;
           state.lastAlertAt = Date.now();
+          state.lastFailuresHash = failuresHash;
         } else {
           console.log("Alert suppressed (duplicate within 2h)");
         }
