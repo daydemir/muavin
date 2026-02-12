@@ -160,6 +160,12 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
     logMessage("assistant", result.text, chatId).catch(e => console.error('logMessage failed:', e));
 
+    // Check if Claude wants to skip (internal signal, not sent to user)
+    if (isSkipResponse(result.text)) {
+      console.log(timestamp("relay"), "Response skipped (SKIP signal)");
+      return;
+    }
+
     if (!result.text.trim()) {
       await ctx.reply("Done.");
     } else {
