@@ -32,20 +32,27 @@ export interface Config {
   [key: string]: unknown;
 }
 
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function acquireLock(name: string): Promise<boolean> {
   const lockFile = join(MUAVIN_DIR, `${name}.lock`);
   try {
     const existing = await readFile(lockFile, "utf-8").catch(() => null);
     if (existing) {
       const pid = parseInt(existing);
-      try {
-        process.kill(pid, 0);
+      if (isPidAlive(pid)) {
         console.log(`Another instance running (PID: ${pid})`);
         return false;
-      } catch {
-        console.log(`Stale lock detected (PID: ${pid}), removing lock file`);
-        await unlink(lockFile);
       }
+      console.log(`Stale lock detected (PID: ${pid}), removing lock file`);
+      await unlink(lockFile);
     }
     await writeFile(lockFile, process.pid.toString(), { flag: "wx" });
     return true;
@@ -82,6 +89,18 @@ export async function loadConfig(): Promise<Config> {
     throw new Error("config.json not found in ~/.muavin/. Run 'bun muavin setup'");
   }
   return config;
+}
+
+export function formatLocalTime(date?: Date): string {
+  return (date ?? new Date()).toLocaleString("en-US", {
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export function timestamp(prefix: string): string {
@@ -137,7 +156,7 @@ export async function readOutbox(): Promise<Array<OutboxItem & { _filename: stri
       const item: OutboxItem = JSON.parse(content);
       items.push({ ...item, _filename: file });
     } catch {
-      // Skip and delete corrupted files
+      console.error(`readOutbox: deleting corrupted outbox file: ${file}`);
       await unlink(join(OUTBOX_DIR, file)).catch(() => {});
     }
   }

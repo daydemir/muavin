@@ -103,8 +103,10 @@ export async function callClaude(prompt: string, opts?: {
         setTimeout(() => {
           if (proc.pid && activeChildPids.has(proc.pid)) {
             proc.kill("SIGKILL");
+            activeChildPids.delete(proc.pid);
           }
         }, KILL_GRACE_MS);
+        if (proc.pid) activeChildPids.delete(proc.pid);
         const hours = Math.floor(opts.timeoutMs! / 3600000);
         const minutes = Math.floor((opts.timeoutMs! % 3600000) / 60000);
         const parts = [];

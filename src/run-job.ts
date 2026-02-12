@@ -3,7 +3,7 @@ import { join } from "path";
 import { callClaude } from "./claude";
 import { runHealthCheck, extractMemories } from "./memory";
 import { cleanupAgents, buildContext, cleanupUploads } from "./agents";
-import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox } from "./utils";
+import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime } from "./utils";
 import type { Job } from "./jobs";
 
 validateEnv();
@@ -50,15 +50,7 @@ try {
     const cleanedUploads = await cleanupUploads(24 * 60 * 60_000);
     console.log(`[${jobId}] cleaned ${cleanedAgents} old agent files, ${cleanedUploads} old uploads`);
   } else if (job.prompt) {
-    const timeStr = now.toLocaleString("en-US", {
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const timeStr = formatLocalTime(now);
     const fullPrompt = `[Job: ${jobId}] Time: ${timeStr}\n\n${job.prompt}`;
     const appendSystemPrompt = await buildContext({
       query: job.prompt,
@@ -73,7 +65,7 @@ try {
       model: job.model,
     });
 
-    if (result.text.trim() === "SKIP") {
+    if (isSkipResponse(result.text)) {
       console.log(`[${jobId}] SKIP`);
     } else {
       await writeOutbox({

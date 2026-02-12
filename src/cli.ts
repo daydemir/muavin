@@ -997,11 +997,10 @@ async function configCommand() {
 
 async function stopCommand() {
   heading("Stopping Muavin daemons...\n");
-  const { waitForUnload, STOPPED_MARKER } = await import("./utils");
+  const { waitForUnload, STOPPED_MARKER, getUid } = await import("./utils");
   await Bun.write(STOPPED_MARKER, "");
 
-  const uidProc = Bun.spawn(["id", "-u"], { stdout: "pipe" });
-  const uid = (await new Response(uidProc.stdout).text()).trim();
+  const uid = await getUid();
 
   const labels = ["ai.muavin.relay", "ai.muavin.heartbeat", "ai.muavin.cron"];
 
@@ -1063,7 +1062,7 @@ async function stopCommand() {
 
 async function deployCommand() {
   heading("Deploying...\n");
-  const { reloadService, STOPPED_MARKER } = await import("./utils");
+  const { reloadService, STOPPED_MARKER, getUid } = await import("./utils");
   const { unlink: unlinkFile } = await import("fs/promises");
   await unlinkFile(STOPPED_MARKER).catch(() => {});
 
@@ -1093,8 +1092,7 @@ async function deployCommand() {
   // Deploy launch daemons
   heading("Deploying launch daemons...");
 
-  const uidProc = Bun.spawn(["id", "-u"]);
-  const uid = (await new Response(uidProc.stdout).text()).trim();
+  const uid = await getUid();
 
   const plists = [
     { file: "ai.muavin.relay.plist", label: "ai.muavin.relay" },
@@ -1152,6 +1150,7 @@ async function deployCommand() {
 }
 
 async function statusCommand() {
+  const { timeAgo } = await import("./utils");
   heading("Muavin Status\n");
 
   // Check daemons
@@ -1330,17 +1329,6 @@ async function statusCommand() {
   } catch {
     dim("  Error reading outbox");
   }
-}
-
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 }
 
 function timeUntil(ts: number): string {

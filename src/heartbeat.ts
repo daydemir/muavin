@@ -7,14 +7,13 @@ import { Bot } from "grammy";
 import { readFile, writeFile, stat, mkdir } from "fs/promises";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 import { sendTelegram } from "./telegram";
 import { listAgents, updateAgent } from "./agents";
 import { callClaude } from "./claude";
-import { writeOutbox, isSkipResponse } from "./utils";
+import { MUAVIN_DIR, loadConfig, writeOutbox, isSkipResponse, isPidAlive } from "./utils";
 
-const MUAVIN_DIR = join(process.env.HOME ?? "~", ".muavin");
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
-const CONFIG_PATH = join(MUAVIN_DIR, "config.json");
 
 interface HeartbeatState {
   lastRun: number;
@@ -37,10 +36,6 @@ async function saveState(state: HeartbeatState): Promise<void> {
   await writeFile(STATE_PATH, JSON.stringify(state, null, 2));
 }
 
-async function loadConfig(): Promise<{ owner: number }> {
-  return JSON.parse(await readFile(CONFIG_PATH, "utf-8"));
-}
-
 async function checkRelayDaemon(): Promise<string | null> {
   const proc = Bun.spawn(["launchctl", "list"], { stdout: "pipe", stderr: "pipe" });
   const output = await new Response(proc.stdout).text();
@@ -58,12 +53,10 @@ async function checkRelayLock(): Promise<string | null> {
   const lockPath = join(MUAVIN_DIR, "relay.lock");
   try {
     const pid = parseInt(await readFile(lockPath, "utf-8"));
-    try {
-      process.kill(pid, 0);
+    if (isPidAlive(pid)) {
       return null;
-    } catch {
-      return `Relay lock stale (PID ${pid} dead but lock exists)`;
     }
+    return `Relay lock stale (PID ${pid} dead but lock exists)`;
   } catch {
     return null;
   }
@@ -134,8 +127,8 @@ async function checkTelegram(): Promise<string | null> {
 
 async function checkErrorLogs(lastRun: number): Promise<string | null> {
   const logFiles = [
-    join(process.env.HOME ?? "~", "Library/Logs/muavin-relay.error.log"),
-    join(process.env.HOME ?? "~", "Library/Logs/muavin-jobs.error.log"),
+    join(homedir(), "Library/Logs/muavin-relay.error.log"),
+    join(homedir(), "Library/Logs/muavin-jobs.error.log"),
   ];
   const recentErrors: string[] = [];
   for (const logFile of logFiles) {
@@ -197,7 +190,7 @@ async function tryRestartDaemon(label: string, state: HeartbeatState): Promise<s
   if (count >= 3) return `${label}: crash loop detected (${count} consecutive failures, giving up)`;
 
   const uid = await getUid();
-  const plistPath = join(process.env.HOME ?? "~", "Library/LaunchAgents", `${label}.plist`);
+  const plistPath = join(homedir(), "Library/LaunchAgents", `${label}.plist`);
   const result = await reloadService(uid, label, plistPath);
 
   if (!result.ok) {
@@ -268,8 +261,8 @@ async function main() {
     }
 
     // AI triage — let Claude decide if this warrants an alert
-    const promptsDir = join(process.env.HOME ?? "~", ".muavin", "prompts");
-    const systemCwd = join(process.env.HOME ?? "~", ".muavin", "system");
+    const promptsDir = join(MUAVIN_DIR, "prompts");
+    const systemCwd = join(MUAVIN_DIR, "system");
     const triagePrompt = readFileSync(join(promptsDir, "heartbeat-triage.md"), "utf-8")
       .replace("{{HEALTH_RESULTS}}", failures.join("\n"));
 

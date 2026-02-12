@@ -3,13 +3,12 @@ import OpenAI from "openai";
 import { readFile, mkdir } from "fs/promises";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { callClaude } from "./claude";
 import { sendAndLog } from "./telegram";
-import { loadConfig } from "./utils";
+import { MUAVIN_DIR, loadConfig } from "./utils";
 
-const SYSTEM_CWD = join(homedir(), ".muavin", "system");
-const PROMPTS_DIR = join(homedir(), ".muavin", "prompts");
+const SYSTEM_CWD = join(MUAVIN_DIR, "system");
+const PROMPTS_DIR = join(MUAVIN_DIR, "prompts");
 
 function extractJSON(text: string): string {
   const match = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
@@ -27,8 +26,6 @@ export const supabase = createClient(
 );
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-
-const MUAVIN_DIR = join(homedir(), ".muavin");
 
 export async function embed(text: string): Promise<number[]> {
   const res = await openai.embeddings.create({
@@ -56,13 +53,14 @@ export async function logMessage(
   if (error) console.error("logMessage insert failed:", error);
 }
 
-async function searchMemoryOnly(
+async function searchRpc(
+  rpcName: string,
   queryEmbedding: number[],
   threshold: number,
   limit: number,
   abortSignal?: AbortSignal,
 ): Promise<Array<{ content: string; source: string; similarity: number }>> {
-  let query = supabase.rpc("search_memory", {
+  let query = supabase.rpc(rpcName, {
     query_embedding: queryEmbedding,
     match_threshold: threshold,
     match_count: limit,
@@ -70,27 +68,7 @@ async function searchMemoryOnly(
   if (abortSignal) query = query.abortSignal(abortSignal);
   const { data, error } = await query;
   if (error) {
-    console.error("searchMemoryOnly error:", error);
-    return [];
-  }
-  return data ?? [];
-}
-
-async function searchMessagesOnly(
-  queryEmbedding: number[],
-  threshold: number,
-  limit: number,
-  abortSignal?: AbortSignal,
-): Promise<Array<{ content: string; source: string; similarity: number }>> {
-  let query = supabase.rpc("search_messages", {
-    query_embedding: queryEmbedding,
-    match_threshold: threshold,
-    match_count: limit,
-  });
-  if (abortSignal) query = query.abortSignal(abortSignal);
-  const { data, error } = await query;
-  if (error) {
-    console.error("searchMessagesOnly error:", error);
+    console.error(`${rpcName} error:`, error);
     return [];
   }
   return data ?? [];
@@ -115,8 +93,8 @@ export async function searchContext(
   const queryEmbedding = await embed(query);
 
   const [memoryResults, messageResults] = await Promise.all([
-    searchMemoryOnly(queryEmbedding, 0.7, limit, abortSignal),
-    searchMessagesOnly(queryEmbedding, 0.75, limit, abortSignal),
+    searchRpc("search_memory", queryEmbedding, 0.7, limit, abortSignal),
+    searchRpc("search_messages", queryEmbedding, 0.75, limit, abortSignal),
   ]);
 
   if (isGoodEnough(memoryResults, limit)) {
@@ -184,10 +162,10 @@ export async function extractMemories(model?: string): Promise<number> {
         // Check for near-duplicates
         try {
           const factEmbedding = await embed(fact.content);
-          const dupes = await searchMemoryOnly(factEmbedding, 0.92, 1);
+          const dupes = await searchRpc("search_memory", factEmbedding, 0.92, 1);
           if (dupes.length > 0) continue;
 
-          await supabase.from("memory").insert({
+          const { error: insertError } = await supabase.from("memory").insert({
             type: fact.type,
             content: fact.content,
             source: "extraction",
@@ -195,7 +173,11 @@ export async function extractMemories(model?: string): Promise<number> {
             source_chat_id: chatId,
             source_date: msgs[0].created_at,
           });
-          extracted++;
+          if (insertError) {
+            console.error("extractMemories: insert failed:", insertError);
+          } else {
+            extracted++;
+          }
         } catch (e) {
           console.error("extractMemories: failed to process fact:", e);
         }
@@ -319,12 +301,17 @@ export async function runHealthCheck(model?: string): Promise<void> {
     for (const item of healthResult.merge) {
       // Insert merged entry
       const embedding = await embed(item.merged).catch((e) => { console.error("health check merge embed failed:", e); return null; });
-      await supabase.from("memory").insert({
+      const { error: mergeInsertError } = await supabase.from("memory").insert({
         type: "personal_fact",
         content: item.merged,
         source: "health_check_merge",
         embedding,
       });
+
+      if (mergeInsertError) {
+        console.error("health check merge insert failed, skipping stale marking:", mergeInsertError);
+        continue;
+      }
 
       // Mark originals as stale
       await supabase

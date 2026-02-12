@@ -1,13 +1,13 @@
 import { validateEnv } from "./env";
 import { Bot, type Context } from "grammy";
-import { writeFile, readFile, mkdir, rename, unlink } from "fs/promises";
+import { writeFile, readFile, mkdir, unlink } from "fs/promises";
 import { watch } from "fs";
 import { join } from "path";
 import { callClaude, killAllChildren } from "./claude";
 import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
-import { acquireLock, releaseLock, MUAVIN_DIR, writeOutbox, readOutbox, clearOutboxItems, timestamp, isSkipResponse } from "./utils";
+import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, writeOutbox, readOutbox, clearOutboxItems, timestamp, isSkipResponse, formatLocalTime, isPidAlive } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
 
 validateEnv();
@@ -23,14 +23,7 @@ const SESSIONS_FILE = join(MUAVIN_DIR, "sessions.json");
 const UPLOADS_DIR = join(MUAVIN_DIR, "uploads");
 
 // ── Allow list from config ─────────────────────────────────
-const configPath = join(process.env.HOME ?? "~", ".muavin", "config.json");
-try {
-  await readFile(configPath);
-} catch {
-  console.error("config.json not found in ~/.muavin/. Run 'bun muavin setup'");
-  process.exit(1);
-}
-const config = JSON.parse(await readFile(configPath, "utf-8"));
+const config = await loadConfig();
 const allowUsers = new Set<number>(config.allowUsers ?? []);
 const allowGroups = new Set<number>(config.allowGroups ?? []);
 
@@ -70,9 +63,7 @@ async function loadSessions(): Promise<SessionMap> {
 }
 
 async function saveSessions(map: SessionMap): Promise<void> {
-  const tmpFile = `${SESSIONS_FILE}.tmp`;
-  await writeFile(tmpFile, JSON.stringify(map, null, 2));
-  await rename(tmpFile, SESSIONS_FILE);
+  await saveJson(SESSIONS_FILE, map);
 }
 
 function getSession(map: SessionMap, chatId: string): SessionState {
@@ -136,15 +127,7 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
 
     // Build prompt with time context
     const now = new Date();
-    const timeStr = now.toLocaleString("en-US", {
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const timeStr = formatLocalTime(now);
 
     const chatType = ctx.chat?.type ?? "private";
     const senderName = ctx.from?.first_name ?? "User";
@@ -246,7 +229,7 @@ async function processOutbox(): Promise<void> {
 // ── Agent processing (background) ───────────────────────────
 
 const agentConcurrency = config.agentConcurrency ?? 10;
-let runningAgentCount = 0;
+let runningAgentCount = (await listAgents({ status: "running" })).length;
 
 async function checkPendingAgents(): Promise<void> {
   try {
@@ -382,16 +365,7 @@ async function checkRunningAgents(): Promise<void> {
 
       // Check for stuck agents (>2h with dead PID)
       if (startedAt > 0 && now - startedAt > 2 * 60 * 60 * 1000) {
-        // Check if PID is alive (simple check, not foolproof)
-        let pidAlive = false;
-        if (agent.pid) {
-          try {
-            process.kill(agent.pid, 0); // signal 0 just checks if process exists
-            pidAlive = true;
-          } catch {
-            pidAlive = false;
-          }
-        }
+        const pidAlive = agent.pid ? isPidAlive(agent.pid) : false;
 
         if (!pidAlive) {
           console.log(timestamp("relay"), `Agent ${agent.id} stuck (>2h, dead PID), marking as failed`);
@@ -543,6 +517,7 @@ bot.on("message:photo", async (ctx) => {
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
     );
+    if (!res.ok) throw new Error(`Photo download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
 
     const caption = ctx.message.caption || "Analyze this image.";
@@ -567,6 +542,7 @@ bot.on("message:document", async (ctx) => {
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
     );
+    if (!res.ok) throw new Error(`Document download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
 
     const caption = ctx.message.caption || `Analyze: ${doc.file_name}`;

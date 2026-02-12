@@ -1,7 +1,7 @@
 import { readFile, writeFile, unlink, readdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import { MUAVIN_DIR, loadJson, loadConfig, reloadService } from "./utils";
+import { MUAVIN_DIR, loadJson, loadConfig, reloadService, getUid } from "./utils";
 
 export interface Job {
   id: string;
@@ -243,9 +243,7 @@ export async function syncJobPlists(): Promise<void> {
     throw new Error("bun not found in PATH");
   }
 
-  const uidProc = Bun.spawn(["id", "-u"], { stdout: "pipe" });
-  const uidText = await new Response(uidProc.stdout).text();
-  const uid = uidText.trim();
+  const uid = await getUid();
 
   const launchAgentsDir = join(homeDir, "Library/LaunchAgents");
   const allFiles = await readdir(launchAgentsDir).catch(() => []);

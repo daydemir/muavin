@@ -1,6 +1,6 @@
-import { readFile, writeFile, readdir, mkdir, unlink, rename, stat } from "fs/promises";
+import { readFile, readdir, mkdir, unlink, stat } from "fs/promises";
 import { join } from "path";
-import { MUAVIN_DIR, loadJson, timeAgo } from "./utils";
+import { MUAVIN_DIR, loadJson, saveJson, timeAgo } from "./utils";
 import type { Job } from "./jobs";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
@@ -44,9 +44,7 @@ export async function createAgent(opts: {
   };
 
   const filePath = join(AGENTS_DIR, `${id}.json`);
-  const tmpPath = `${filePath}.tmp`;
-  await writeFile(tmpPath, JSON.stringify(agent, null, 2));
-  await rename(tmpPath, filePath);
+  await saveJson(filePath, agent);
 
   return agent;
 }
@@ -69,9 +67,7 @@ export async function updateAgent(
   const filePath = join(AGENTS_DIR, filename ?? `${id}.json`);
   const current = JSON.parse(await readFile(filePath, "utf-8")) as AgentFile;
   const { _filename, ...rest } = { ...current, ...updates };
-  const tmpPath = `${filePath}.tmp`;
-  await writeFile(tmpPath, JSON.stringify(rest, null, 2));
-  await rename(tmpPath, filePath);
+  await saveJson(filePath, rest);
 }
 
 export async function listAgents(filter?: {
