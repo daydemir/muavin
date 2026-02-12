@@ -19,6 +19,7 @@ export interface Config {
   startOnLogin?: boolean;
   recentMessageCount?: number;
   repoPath?: string;
+  cleanupRetentionDays?: number;
   // Relay
   relayTimeoutMs?: number;
   relayMaxTurns?: number;

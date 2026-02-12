@@ -10,5 +10,6 @@
   "agentTimeoutMs": 10800000,
   "agentMaxTurns": 100,
   "recentMessageCount": 10,
+  "cleanupRetentionDays": 7,
   "startOnLogin": true
 }
