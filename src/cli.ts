@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import OpenAI from "openai";
+
 import { Bot } from "grammy";
 import { Cron } from "croner";
 import { resolve } from "path";
@@ -14,6 +14,15 @@ const fail = (msg: string) => console.error(pc.red(`✗ ${msg}`));
 const warn = (msg: string) => console.log(pc.yellow(`⚠ ${msg}`));
 const heading = (msg: string) => console.log(pc.bold(msg));
 const dim = (msg: string) => console.log(pc.dim(msg));
+
+async function testEmbedding(apiKey: string): Promise<void> {
+  const res = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: EMBEDDING_MODEL, input: "test", dimensions: EMBEDDING_DIMS }),
+  });
+  if (!res.ok) throw new Error(`OpenAI API error: ${res.status}`);
+}
 
 async function main() {
   const command = Bun.argv[2];
@@ -234,12 +243,7 @@ async function checkExistingOpenAI(
   if (!key) return null;
 
   try {
-    const openai = new OpenAI({ apiKey: key });
-    await openai.embeddings.create({
-      model: EMBEDDING_MODEL,
-      input: "test",
-      dimensions: EMBEDDING_DIMS,
-    });
+    await testEmbedding(key);
     ok("OpenAI already configured\n");
     return key;
   } catch {
@@ -418,12 +422,7 @@ async function setupOpenAI(): Promise<string | null> {
   }
 
   try {
-    const openai = new OpenAI({ apiKey: key });
-    await openai.embeddings.create({
-      model: EMBEDDING_MODEL,
-      input: "test",
-      dimensions: EMBEDDING_DIMS,
-    });
+    await testEmbedding(key);
     ok("OpenAI API verified\n");
     return key;
   } catch {
@@ -532,12 +531,7 @@ async function verifyAll(): Promise<boolean> {
 
   // Test OpenAI embeddings
   try {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-    await openai.embeddings.create({
-      model: EMBEDDING_MODEL,
-      input: "test",
-      dimensions: EMBEDDING_DIMS,
-    });
+    await testEmbedding(process.env.OPENAI_API_KEY!);
     ok("OpenAI API verified");
   } catch (error) {
     fail("OpenAI API failed");
@@ -917,8 +911,7 @@ async function editField(
 
   if (field.key === "OPENAI_API_KEY") {
     try {
-      const openai = new OpenAI({ apiKey: newValue });
-      await openai.embeddings.create({ model: EMBEDDING_MODEL, input: "test", dimensions: EMBEDDING_DIMS });
+      await testEmbedding(newValue);
       ok("OpenAI API verified");
     } catch {
       fail("Invalid OpenAI API key");

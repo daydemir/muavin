@@ -15,7 +15,6 @@
     "@supabase/supabase-js": "^2.45.0",
     "croner": "^10.0.1",
     "grammy": "^1.21.1",
-    "openai": "^4.73.0",
     "picocolors": "^1.1.1",
     "zod": "^4.3.6"
   },
