@@ -108,6 +108,7 @@ async function checkOpenAI(): Promise<string | null> {
     await openai.embeddings.create({
       model: "text-embedding-3-small",
       input: "heartbeat",
+      dimensions: 1536,
     });
     return null;
   } catch (e) {
