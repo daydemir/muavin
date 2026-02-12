@@ -137,7 +137,7 @@ export async function extractMemories(model?: string): Promise<number> {
 
       const prompt = promptTemplate.replace("{{CONVERSATION}}", conversation);
 
-      const result = await callClaude(prompt, {
+      let result = await callClaude(prompt, {
         noSessionPersistence: true,
         cwd: SYSTEM_CWD,
         maxTurns: 1,
@@ -151,9 +151,23 @@ export async function extractMemories(model?: string): Promise<number> {
       let facts: Array<{ type: string; content: string }>;
       try {
         facts = JSON.parse(extractJSON(result.text));
-      } catch {
+      } catch (parseError) {
         console.error("extractMemories: failed to parse Claude response for chat", chatId, "response:", result.text.slice(0, 200));
-        continue;
+        // Retry with explicit JSON format request
+        const retryPrompt = `${prompt}\n\nIMPORTANT: You MUST respond with ONLY valid JSON matching the schema: [{"type": "...", "content": "..."}]. No other text.`;
+        try {
+          result = await callClaude(retryPrompt, {
+            noSessionPersistence: true,
+            cwd: SYSTEM_CWD,
+            maxTurns: 1,
+            timeoutMs: 300000,
+            model,
+          });
+          facts = JSON.parse(extractJSON(result.text));
+        } catch {
+          console.error("extractMemories: retry also failed for chat", chatId);
+          continue;
+        }
       }
 
       if (!Array.isArray(facts)) continue;

@@ -4,7 +4,7 @@ import { MUAVIN_DIR, loadJson, saveJson, timeAgo } from "./utils";
 import type { Job } from "./jobs";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
-const SUPABASE_TIMEOUT_MS = 15_000;
+const SUPABASE_TIMEOUT_MS = 30_000;
 
 export interface AgentFile {
   id: string;
@@ -184,7 +184,7 @@ export async function buildContext(opts: {
     Promise.race([
       searchContext(opts.query, 3, searchAbort.signal),
       new Promise<[]>(resolve => setTimeout(() => {
-        console.error("buildContext: Supabase search timed out (15s)");
+        console.error("buildContext: Supabase search timed out (30s)");
         searchAbort.abort();
         resolve([]);
       }, SUPABASE_TIMEOUT_MS)),
@@ -194,7 +194,7 @@ export async function buildContext(opts: {
       ? Promise.race([
           getRecentMessages(String(opts.chatId), opts.recentCount, recentAbort.signal),
           new Promise<[]>(resolve => setTimeout(() => {
-            console.error("buildContext: recent messages timed out (15s)");
+            console.error("buildContext: recent messages timed out (30s)");
             recentAbort.abort();
             resolve([]);
           }, SUPABASE_TIMEOUT_MS)),
