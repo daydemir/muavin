@@ -177,9 +177,6 @@ export async function runAutoSafe(job: Job, config: Config): Promise<void> {
       return;
     }
 
-    // Pick oldest (FIFO)
-    const issue = issues[0];
-
     // Get repo dir
     const repoDir = config.repoPath || "/Users/deniz/Build/deniz/claw";
 
@@ -222,42 +219,74 @@ export async function runAutoSafe(job: Job, config: Config): Promise<void> {
     );
     const preSha = preShaResult.stdout.trim();
 
-    // Triage
+    // Get recent git log for already-fixed detection
+    const gitLogResult = await execCapture(
+      ["git", "log", "--oneline", "-30", "--all"],
+      repoDir
+    );
+    const recentGitLog = gitLogResult.stdout;
+
+    // Build issue list summary for bundling awareness
+    const issuesSummary = issues
+      .map((i) => `- #${i.number}: ${i.title}`)
+      .join("\n");
+
+    // Pick primary issue (oldest / FIFO)
+    const issue = issues[0];
+
+    // Triage — includes already-fixed detection and bundling
     const triagePrompt = `You are a triage agent for the muavin project. Your job is to decide whether a GitHub issue is safe to fix autonomously.
 
-## Issue #${issue.number}: ${issue.title}
+## Primary issue: #${issue.number}: ${issue.title}
 
 ${issue.body || "(no description)"}
 
+## All open auto-safe issues
+
+${issuesSummary}
+
+## Recent git history (for detecting already-fixed issues)
+
+${recentGitLog}
+
 ## Your task
 
-1. Read the relevant source files mentioned in or implied by the issue
-2. Assess:
+1. First, check if this issue has ALREADY been fixed by prior work:
+   - Search git log for commits that mention this issue number or address the same problem
+   - Read the relevant source files and check if the described problem still exists in the current code
+   - If the issue is already resolved, mark it as ALREADY_FIXED
+
+2. Check if any other open auto-safe issues are closely related to this one (same files, same feature area, complementary fixes). If so, they should be bundled and fixed together in one commit.
+
+3. If not already fixed, assess:
    - Is the issue well-defined with a clear fix?
    - Is the fix localized (touches ≤3 files)?
    - Could the fix break existing functionality?
    - Does it require architectural decisions?
    - Does it require new dependencies?
 
-3. Respond with EXACTLY this JSON format:
+4. Respond with EXACTLY this JSON format:
 {
-  "decision": "GO" or "SKIP",
+  "decision": "GO" or "SKIP" or "ALREADY_FIXED",
   "reasoning": "one sentence explaining why",
   "files": ["list", "of", "files", "to", "modify"],
-  "approach": "brief description of the fix approach"
+  "approach": "brief description of the fix approach",
+  "bundledIssues": [list of issue numbers to fix together, including the primary issue]
 }
 
 Rules:
+- ALREADY_FIXED if the code already addresses the issue (set bundledIssues to just [${issue.number}])
 - SKIP if the issue is vague, requires architectural decisions, or could break things
 - SKIP if it requires new npm packages or external service changes
-- SKIP if it touches more than 3 files
+- SKIP if the combined fix touches more than 5 files
 - GO only if the fix is obvious, localized, and low-risk
+- When bundling: only bundle issues that share the same files or are tightly coupled
 - When in doubt, SKIP`;
 
     const triageResult = await callClaude(triagePrompt, {
       noSessionPersistence: true,
       maxTurns: 20,
-      timeoutMs: 120_000,
+      timeoutMs: 180_000,
       cwd: repoDir,
       model: job.model ?? "sonnet",
     });
@@ -272,15 +301,18 @@ Rules:
       reasoning: string;
       files: string[];
       approach: string;
+      bundledIssues: number[];
     };
 
     try {
-      // Extract JSON from response
       const jsonMatch = triageResult.text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         throw new Error("No JSON found in response");
       }
       triageDecision = JSON.parse(jsonMatch[0]);
+      if (!triageDecision.bundledIssues?.length) {
+        triageDecision.bundledIssues = [issue.number];
+      }
     } catch (e) {
       console.error("auto-safe: failed to parse triage response", e);
       state.skippedIssues[issue.number] =
@@ -289,9 +321,32 @@ Rules:
       return;
     }
 
+    // Handle already-fixed issues
+    if (triageDecision.decision === "ALREADY_FIXED") {
+      console.log(
+        `auto-safe: #${issue.number} already fixed — ${triageDecision.reasoning}`
+      );
+      // Close the issue with a comment
+      await execCapture(
+        [
+          "gh", "issue", "comment", issue.number.toString(),
+          "--repo", REPO,
+          "--body", `auto-safe: this issue appears to have been already resolved. ${triageDecision.reasoning}`,
+        ],
+        process.cwd()
+      ).catch(console.error);
+      await execCapture(
+        ["gh", "issue", "close", issue.number.toString(), "--repo", REPO],
+        process.cwd()
+      ).catch(console.error);
+      state.fixedIssues.push(issue.number);
+      await saveJson(stateFile, state);
+      return;
+    }
+
     if (triageDecision.decision !== "GO") {
       console.log(
-        `auto-safe: skipping issue #${issue.number} — ${triageDecision.reasoning}`
+        `auto-safe: skipping #${issue.number} — ${triageDecision.reasoning}`
       );
       state.skippedIssues[issue.number] =
         (state.skippedIssues[issue.number] || 0) + 1;
@@ -299,12 +354,27 @@ Rules:
       return;
     }
 
+    // Resolve bundled issues details
+    const bundledIssues = triageDecision.bundledIssues
+      .map((n) => issues.find((i) => i.number === n))
+      .filter((i): i is Issue => i != null);
+
+    const bundledSummary = bundledIssues
+      .map((i) => `### Issue #${i.number}: ${i.title}\n\n${i.body || "(no description)"}`)
+      .join("\n\n---\n\n");
+
+    const fixesLines = bundledIssues
+      .map((i) => `fixes #${i.number}`)
+      .join("\n   ");
+
+    const commitTitle = bundledIssues.length === 1
+      ? `fix: ${bundledIssues[0].title}`
+      : `fix: ${bundledIssues[0].title} (+ ${bundledIssues.length - 1} related)`;
+
     // Implement
-    const implementPrompt = `You are an implementation agent for the muavin project. Fix the following GitHub issue.
+    const implementPrompt = `You are an implementation agent for the muavin project. Fix the following GitHub issue(s).
 
-## Issue #${issue.number}: ${issue.title}
-
-${issue.body || "(no description)"}
+${bundledSummary}
 
 ## Triage assessment
 Files to modify: ${triageDecision.files.join(", ")}
@@ -317,9 +387,9 @@ Approach: ${triageDecision.approach}
 3. Make the minimal fix — no refactoring, no extras
 4. Stage your changes: git add <specific files>
 5. Commit with message:
-   fix: ${issue.title}
+   ${commitTitle}
 
-   fixes #${issue.number}
+   ${fixesLines}
 6. Do NOT push — the orchestrator handles that
 7. Do NOT modify any files outside the identified scope
 8. Do NOT add new dependencies
@@ -457,79 +527,64 @@ If you cannot complete the fix, respond with "FAILED: <reason>" and do not commi
       prListResult.stdout
     );
 
-    const fixLine = `- fixes #${issue.number}: ${issue.title}`;
+    const fixLines = bundledIssues
+      .map((i) => `- fixes #${i.number}: ${i.title}`)
+      .join("\n");
 
     if (existingPrs.length > 0) {
       const pr = existingPrs[0];
-      if (!pr.body.includes(fixLine)) {
-        const newBody = pr.body + "\n" + fixLine;
+      const newLines = bundledIssues
+        .filter((i) => !pr.body.includes(`fixes #${i.number}`))
+        .map((i) => `- fixes #${i.number}: ${i.title}`);
+      if (newLines.length > 0) {
+        const newBody = pr.body + "\n" + newLines.join("\n");
         await execCapture(
-          [
-            "gh",
-            "pr",
-            "edit",
-            pr.number.toString(),
-            "--repo",
-            REPO,
-            "--body",
-            newBody,
-          ],
+          ["gh", "pr", "edit", pr.number.toString(), "--repo", REPO, "--body", newBody],
           process.cwd()
         ).catch(console.error);
       }
     } else {
-      // Create new PR
       await execCapture(
         [
-          "gh",
-          "pr",
-          "create",
-          "--repo",
-          REPO,
-          "--head",
-          BRANCH,
-          "--base",
-          "main",
-          "--title",
-          "auto-safe: automated fixes",
-          "--body",
-          fixLine,
+          "gh", "pr", "create", "--repo", REPO,
+          "--head", BRANCH, "--base", "main",
+          "--title", "auto-safe: automated fixes",
+          "--body", fixLines,
         ],
         process.cwd()
       ).catch(console.error);
     }
 
-    // Comment on issue
-    await execCapture(
-      [
-        "gh",
-        "issue",
-        "comment",
-        issue.number.toString(),
-        "--repo",
-        REPO,
-        "--body",
-        "auto-safe: fix committed to `auto-safe` branch. PR will auto-close this when merged.",
-      ],
-      process.cwd()
-    ).catch(console.error);
+    // Comment on all bundled issues
+    for (const bi of bundledIssues) {
+      await execCapture(
+        [
+          "gh", "issue", "comment", bi.number.toString(),
+          "--repo", REPO,
+          "--body", "auto-safe: fix committed to `auto-safe` branch. PR will auto-close this when merged.",
+        ],
+        process.cwd()
+      ).catch(console.error);
+    }
 
-    // Update state
-    state.fixedIssues.push(issue.number);
+    // Update state for all bundled issues
+    for (const bi of bundledIssues) {
+      state.fixedIssues.push(bi.number);
+    }
     state.consecutiveFailures = 0;
     await saveJson(stateFile, state);
 
-    // Notify owner
+    const issueRefs = bundledIssues.map((i) => `#${i.number}`).join(", ");
     await writeOutbox({
       source: "job",
       sourceId: "auto-safe",
       task: "Auto-safe issue fixer",
-      result: `auto-safe: fixed #${issue.number} (${issue.title}) — pushed to auto-safe branch, PR updated`,
+      result: `auto-safe: fixed ${issueRefs} — pushed to auto-safe branch, PR updated`,
       chatId: config.owner,
       createdAt: new Date().toISOString(),
     });
 
-    console.log(`auto-safe: successfully fixed #${issue.number}`);
+    console.log(`auto-safe: successfully fixed ${issueRefs}`);
   } finally {
     await releaseLock("auto-safe");
   }
