@@ -202,7 +202,7 @@ async function processOutbox(): Promise<void> {
       `${idx + 1}. [${item.source}${item.sourceId ? `:${item.sourceId}` : ""}] ${item.task ?? ""}:\n${item.result}`
     ).join("\n\n");
 
-    const prompt = `You have ${outboxItems.length} pending result(s) to deliver:\n\n${itemsList}\n\nReview these results and deliver them to me. If they are not worth delivering (e.g., redundant, not interesting, or already covered), respond with exactly "SKIP" to dismiss them.`;
+    const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIf none are worth delivering (redundant, low-value, or already covered in recent conversation), respond with exactly "SKIP".`;
 
     // Call Claude (no session)
     const result = await callClaude(prompt, {
@@ -572,7 +572,7 @@ bot.on("message:voice", async (ctx) => {
 // ── Response chunking ───────────────────────────────────────
 
 async function sendChunk(ctx: Context, text: string): Promise<void> {
-  text = toTelegramMarkdown(text);
+  // text is already markdown-formatted from sendResponse
   try {
     await ctx.reply(text, { parse_mode: "Markdown" });
   } catch (e: any) {
@@ -586,13 +586,15 @@ async function sendChunk(ctx: Context, text: string): Promise<void> {
 }
 
 async function sendResponse(ctx: Context, response: string): Promise<void> {
+  // Apply markdown conversion before chunking to avoid splitting mid-escape or mid-code-block
+  const formatted = toTelegramMarkdown(response);
   const MAX = 4000;
-  if (response.length <= MAX) {
-    await sendChunk(ctx, response);
+  if (formatted.length <= MAX) {
+    await sendChunk(ctx, formatted);
     return;
   }
 
-  let remaining = response;
+  let remaining = formatted;
   while (remaining.length > 0) {
     if (remaining.length <= MAX) {
       await sendChunk(ctx, remaining);

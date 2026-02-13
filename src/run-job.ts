@@ -46,7 +46,8 @@ try {
     const extracted = await extractMemories(job.model);
     console.log(`[${jobId}] extracted ${extracted} memories`);
   } else if (job.action === "cleanup-agents") {
-    const cleanedAgents = await cleanupAgents(7 * 24 * 60 * 60_000);
+    const retentionDays = config.cleanupRetentionDays ?? 7;
+    const cleanedAgents = await cleanupAgents(retentionDays * 24 * 60 * 60_000);
     const cleanedUploads = await cleanupUploads(24 * 60 * 60_000);
     console.log(`[${jobId}] cleaned ${cleanedAgents} old agent files, ${cleanedUploads} old uploads`);
   } else if (job.prompt) {

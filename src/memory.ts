@@ -1,11 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
-import OpenAI from "openai";
 import { readFile, mkdir } from "fs/promises";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { callClaude } from "./claude";
 import { sendAndLog } from "./telegram";
 import { MUAVIN_DIR, loadConfig } from "./utils";
+import { EMBEDDING_DIMS, EMBEDDING_MODEL } from "./constants";
 
 const SYSTEM_CWD = join(MUAVIN_DIR, "system");
 const PROMPTS_DIR = join(MUAVIN_DIR, "prompts");
@@ -45,14 +45,19 @@ export const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!,
 );
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-
 export async function embed(text: string): Promise<number[]> {
-  const res = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: text,
+  // Raw fetch: OpenAI SDK v4.104.0 corrupts dimensions param on Bun
+  const res = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model: EMBEDDING_MODEL, input: text, dimensions: EMBEDDING_DIMS }),
   });
-  return res.data[0].embedding;
+  if (!res.ok) throw new Error(`OpenAI embeddings failed: ${res.status} ${await res.text()}`);
+  const data = await res.json() as { data: Array<{ embedding: number[] }> };
+  return data.data[0].embedding;
 }
 
 export async function logMessage(
