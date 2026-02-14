@@ -522,6 +522,7 @@ bot.on("message:photo", async (ctx) => {
     const filePath = join(UPLOADS_DIR, `photo_${Date.now()}.jpg`);
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
+      { keepalive: false } as RequestInit,
     );
     if (!res.ok) throw new Error(`Photo download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
@@ -547,6 +548,7 @@ bot.on("message:document", async (ctx) => {
 
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
+      { keepalive: false } as RequestInit,
     );
     if (!res.ok) throw new Error(`Document download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
@@ -571,14 +573,13 @@ bot.on("message:voice", async (ctx) => {
 
 // ── Response chunking ───────────────────────────────────────
 
-async function sendChunk(ctx: Context, text: string): Promise<void> {
-  // text is already markdown-formatted from sendResponse
+async function sendChunk(ctx: Context, formatted: string, plain: string): Promise<void> {
   try {
-    await ctx.reply(text, { parse_mode: "Markdown" });
+    await ctx.reply(formatted, { parse_mode: "Markdown" });
   } catch (e: any) {
     if (e?.description?.includes("can't parse") || e?.error_code === 400) {
       console.log("Markdown parse failed, retrying without parse_mode");
-      await ctx.reply(text);
+      await ctx.reply(plain);
     } else {
       throw e;
     }
@@ -586,27 +587,49 @@ async function sendChunk(ctx: Context, text: string): Promise<void> {
 }
 
 async function sendResponse(ctx: Context, response: string): Promise<void> {
-  // Apply markdown conversion before chunking to avoid splitting mid-escape or mid-code-block
   const formatted = toTelegramMarkdown(response);
   const MAX = 4000;
+
+  // Single chunk case
   if (formatted.length <= MAX) {
-    await sendChunk(ctx, formatted);
+    await sendChunk(ctx, formatted, response);
     return;
   }
 
+  // Multi-chunk case: chunk both formatted and plain versions
+  const formattedChunks: string[] = [];
   let remaining = formatted;
   while (remaining.length > 0) {
     if (remaining.length <= MAX) {
-      await sendChunk(ctx, remaining);
+      formattedChunks.push(remaining);
       break;
     }
     let idx = remaining.lastIndexOf("\n\n", MAX);
     if (idx <= 0) idx = remaining.lastIndexOf("\n", MAX);
     if (idx <= 0) idx = remaining.lastIndexOf(" ", MAX);
     if (idx <= 0) idx = MAX;
-
-    await sendChunk(ctx, remaining.slice(0, idx));
+    formattedChunks.push(remaining.slice(0, idx));
     remaining = remaining.slice(idx).trim();
+  }
+
+  const plainChunks: string[] = [];
+  remaining = response;
+  while (remaining.length > 0) {
+    if (remaining.length <= MAX) {
+      plainChunks.push(remaining);
+      break;
+    }
+    let idx = remaining.lastIndexOf("\n\n", MAX);
+    if (idx <= 0) idx = remaining.lastIndexOf("\n", MAX);
+    if (idx <= 0) idx = remaining.lastIndexOf(" ", MAX);
+    if (idx <= 0) idx = MAX;
+    plainChunks.push(remaining.slice(0, idx));
+    remaining = remaining.slice(idx).trim();
+  }
+
+  // Send each chunk with its fallback
+  for (let i = 0; i < formattedChunks.length; i++) {
+    await sendChunk(ctx, formattedChunks[i], plainChunks[i] ?? formattedChunks[i]);
   }
 }
 

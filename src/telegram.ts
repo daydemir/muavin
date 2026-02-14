@@ -28,11 +28,9 @@ export async function sendTelegram(
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN not set");
 
-  text = toTelegramMarkdown(text);
-
   const body: { chat_id: number; text: string; parse_mode?: string } = {
     chat_id: chatId,
-    text,
+    text: opts?.parseMode ? toTelegramMarkdown(text) : text,
   };
 
   if (opts?.parseMode) {
@@ -41,9 +39,10 @@ export async function sendTelegram(
 
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    keepalive: false,
+    headers: { "Content-Type": "application/json", "Connection": "close" },
     body: JSON.stringify(body),
-  });
+  } as RequestInit);
 
   if (!res.ok) {
     const responseBody = await res.text().catch(() => "");
@@ -59,9 +58,10 @@ export async function sendTelegram(
 
       const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        keepalive: false,
+        headers: { "Content-Type": "application/json", "Connection": "close" },
         body: JSON.stringify(plainBody),
-      });
+      } as RequestInit);
 
       if (!retryRes.ok) {
         const retryResponseBody = await retryRes.text().catch(() => "");

@@ -43,18 +43,29 @@ function extractJSON(text: string): string {
 export const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!,
+  {
+    global: {
+      fetch: ((url: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        headers.set("Connection", "close");
+        return fetch(url, { ...init, keepalive: false, headers } as RequestInit);
+      }) as typeof fetch,
+    },
+  },
 );
 
 export async function embed(text: string): Promise<number[]> {
   // Raw fetch: OpenAI SDK v4.104.0 corrupts dimensions param on Bun
   const res = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
+    keepalive: false,
     headers: {
       "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
       "Content-Type": "application/json",
+      "Connection": "close",
     },
     body: JSON.stringify({ model: EMBEDDING_MODEL, input: text, dimensions: EMBEDDING_DIMS }),
-  });
+  } as RequestInit);
   if (!res.ok) throw new Error(`OpenAI embeddings failed: ${res.status} ${await res.text()}`);
   const data = await res.json() as { data: Array<{ embedding: number[] }> };
   return data.data[0].embedding;
