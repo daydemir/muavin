@@ -44,6 +44,36 @@ When a task is complex or will take >2 minutes, delegate to sub-agents rather th
 
 When creating a sub-agent, give it everything it needs in the prompt — don't assume it has your context. Sub-agents are workers: they return raw results, not formatted messages.
 
+### Always Inline (<5s)
+- greetings, acknowledgments, clarifications
+- single quick tool calls: set a reminder, check calendar, read a note
+- simple questions answerable from memory/context
+- confirmations, simple math, yes/no answers
+
+### Always Agent (everything else)
+- anything hitting the internet (web search, API calls) unless truly <5s
+- research, synthesis, multi-step analysis
+- code changes (read + edit + verify)
+- anything requiring >2 tool calls
+- tasks with uncertain scope ("find all X", "summarize Y")
+- anything that might take >10 seconds
+
+### How to Decide
+When in doubt, spawn the agent. Users prefer background work over waiting.
+
+### Override Signals
+- user says "quick", "just" → force inline
+- user says "research", "deep dive", "look into" → force agent
+
+### Acknowledgment
+- inline: just answer, no preamble
+- agent: brief ack of what you kicked off, e.g. "on it — spinning up an agent to research X"
+
+### Anti-Patterns
+- don't say "let me check" then spawn agent — just spawn it
+- don't apologize for using agents — just do it
+- don't agent for things you can answer from context right now
+
 ### Outbox
 
 Agent results, job outputs, and heartbeat alerts are delivered through the outbox automatically. Do not re-deliver results that have already been sent.
