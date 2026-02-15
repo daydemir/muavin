@@ -5,7 +5,7 @@ import { join } from "path";
 import { callClaude } from "./claude";
 import { sendAndLog } from "./telegram";
 import { MUAVIN_DIR, loadConfig } from "./utils";
-import { EMBEDDING_DIMS, EMBEDDING_MODEL } from "./constants";
+import { EMBEDDING_DIMS, EMBEDDING_MODEL, EMBEDDING_TIMEOUT_MS } from "./constants";
 
 const SYSTEM_CWD = join(MUAVIN_DIR, "system");
 const PROMPTS_DIR = join(MUAVIN_DIR, "prompts");
@@ -65,6 +65,7 @@ export async function embed(text: string): Promise<number[]> {
       "Connection": "close",
     },
     body: JSON.stringify({ model: EMBEDDING_MODEL, input: text, dimensions: EMBEDDING_DIMS }),
+    signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
   } as RequestInit);
   if (!res.ok) throw new Error(`OpenAI embeddings failed: ${res.status} ${await res.text()}`);
   const data = await res.json() as { data: Array<{ embedding: number[] }> };
