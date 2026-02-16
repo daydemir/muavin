@@ -299,6 +299,53 @@ export async function runHealthCheck(model?: string): Promise<void> {
     return;
   }
 
+  // Validate structure
+  const validMemoryIds = new Set(memories.map(m => m.id));
+
+  function isValidStructure(obj: any): obj is HealthCheckResult {
+    return (
+      obj &&
+      typeof obj === "object" &&
+      Array.isArray(obj.stale) &&
+      Array.isArray(obj.clarify) &&
+      Array.isArray(obj.merge) &&
+      Array.isArray(obj.resolved)
+    );
+  }
+
+  if (!isValidStructure(healthResult)) {
+    console.error("Health check result has invalid structure:", Object.keys(healthResult));
+    return;
+  }
+
+  // Filter and validate IDs
+  const originalCounts = {
+    stale: healthResult.stale.length,
+    clarify: healthResult.clarify.length,
+    merge: healthResult.merge.length,
+    resolved: healthResult.resolved.length,
+  };
+
+  healthResult.stale = healthResult.stale.filter(id => validMemoryIds.has(id));
+  healthResult.clarify = healthResult.clarify.filter(item => validMemoryIds.has(item.id));
+  healthResult.merge = healthResult.merge.filter(item => item.ids.every(id => validMemoryIds.has(id)));
+  healthResult.resolved = healthResult.resolved.filter(item =>
+    validMemoryIds.has(item.stale_id) && validMemoryIds.has(item.kept_id)
+  );
+
+  // Log filtered entries
+  const filteredCounts = {
+    stale: originalCounts.stale - healthResult.stale.length,
+    clarify: originalCounts.clarify - healthResult.clarify.length,
+    merge: originalCounts.merge - healthResult.merge.length,
+    resolved: originalCounts.resolved - healthResult.resolved.length,
+  };
+
+  const totalFiltered = Object.values(filteredCounts).reduce((a, b) => a + b, 0);
+  if (totalFiltered > 0) {
+    console.warn(`Health check: filtered ${totalFiltered} entries with invalid IDs:`, filteredCounts);
+  }
+
   // Load config for owner chat ID
   const config = await loadConfig();
 
