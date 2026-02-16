@@ -75,7 +75,7 @@ const sessions = await loadSessions();
 // ── Message queue (two-array queue) ─────────────────────────
 
 const userQueue: Array<{ ctx: Context; prompt: string }> = [];
-const outboxQueue: Array<"check"> = [];
+let outboxPending = false;
 let processing = false;
 
 function scheduleQueue(): void {
@@ -96,12 +96,25 @@ async function drainQueues(): Promise<void> {
         await processUserMessage(item.ctx, item.prompt);
       }
 
-      // If no user messages, process one outbox item
-      if (outboxQueue.length > 0) {
-        outboxQueue.shift();
-        await processOutbox();
+      if (outboxPending) {
+        outboxPending = false;
+        const delivery = await prepareOutbox();
+
+        if (delivery) {
+          // Drain user messages that arrived during formatting
+          while (userQueue.length > 0) {
+            const item = userQueue.shift()!;
+            await processUserMessage(item.ctx, item.prompt);
+          }
+
+          const success = await sendAndLog(config.owner, delivery.text, { parseMode: "Markdown" });
+          if (success) {
+            console.log(timestamp("relay"), "Delivered outbox item(s) to owner");
+          } else {
+            console.error(timestamp("relay"), "Outbox delivery send failed");
+          }
+        }
       } else {
-        // Both queues empty
         break;
       }
     }
@@ -183,11 +196,17 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
   }
 }
 
-async function processOutbox(): Promise<void> {
+interface OutboxDelivery {
+  text: string;
+}
+
+async function prepareOutbox(): Promise<OutboxDelivery | null> {
   try {
-    // Read outbox items
     const outboxItems = await readOutbox();
-    if (outboxItems.length === 0) return;
+    if (outboxItems.length === 0) return null;
+
+    // Clear immediately — prevents re-delivery on restart
+    await clearOutboxItems(outboxItems.map(i => i._filename));
 
     // Build voice context
     const appendSystemPrompt = await buildContext({
@@ -204,7 +223,6 @@ async function processOutbox(): Promise<void> {
 
     const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIf none are worth delivering (redundant, low-value, or already covered in recent conversation), respond with exactly "SKIP".`;
 
-    // Call Claude (no session)
     const result = await callClaude(prompt, {
       appendSystemPrompt,
       timeoutMs: config.relayTimeoutMs ?? 600000,
@@ -212,23 +230,15 @@ async function processOutbox(): Promise<void> {
       noSessionPersistence: true,
     });
 
-    // Check if Claude wants to skip
     if (isSkipResponse(result.text)) {
       console.log(timestamp("relay"), "Outbox delivery skipped by voice");
-      await clearOutboxItems(outboxItems.map(i => i._filename));
-      return;
+      return null;
     }
 
-    // Send to owner
-    const success = await sendAndLog(config.owner, result.text, { parseMode: "Markdown" });
-    if (success) {
-      console.log(timestamp("relay"), `Delivered ${outboxItems.length} outbox item(s) to owner`);
-      await clearOutboxItems(outboxItems.map(i => i._filename));
-    } else {
-      console.error(timestamp("relay"), `Outbox delivery failed, ${outboxItems.length} item(s) will retry`);
-    }
+    return { text: result.text };
   } catch (error) {
-    console.error(timestamp("relay"), "Error in processOutbox:", error);
+    console.error(timestamp("relay"), "Error in prepareOutbox:", error);
+    return null;
   }
 }
 
@@ -254,6 +264,17 @@ async function checkPendingAgents(): Promise<void> {
   } catch (error) {
     console.error(timestamp("relay"), "checkPendingAgents error:", error);
   }
+}
+
+function agentOutboxItem(agent: AgentFile, result: string): Parameters<typeof writeOutbox>[0] {
+  return {
+    source: "agent",
+    sourceId: agent.id,
+    task: agent.task,
+    result,
+    chatId: agent.chatId,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 async function runAgent(agent: AgentFile): Promise<void> {
@@ -298,19 +319,8 @@ async function runAgent(agent: AgentFile): Promise<void> {
     const elapsed = Math.round((Date.now() - startTime) / 1000);
     console.log(timestamp("relay"), `Agent ${agent.id} completed in ${elapsed}s`);
 
-    // Write to outbox
-    await writeOutbox({
-      source: "agent",
-      sourceId: agent.id,
-      task: agent.task,
-      result: result.text,
-      chatId: agent.chatId,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Push to outbox queue for voice processing
-    outboxQueue.push("check");
-    scheduleQueue();
+    // Write to outbox (watcher triggers delivery)
+    await writeOutbox(agentOutboxItem(agent, result.text));
   } catch (error) {
     // Mark as failed
     const errorMsg = error instanceof Error ? error.message : String(error);
@@ -322,19 +332,8 @@ async function runAgent(agent: AgentFile): Promise<void> {
 
     console.error(timestamp("relay"), `Agent ${agent.id} failed:`, errorMsg);
 
-    // Write error to outbox
-    await writeOutbox({
-      source: "agent",
-      sourceId: agent.id,
-      task: agent.task,
-      result: `Agent failed: ${errorMsg}`,
-      chatId: agent.chatId,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Push to outbox queue
-    outboxQueue.push("check");
-    scheduleQueue();
+    // Write error to outbox (watcher triggers delivery)
+    await writeOutbox(agentOutboxItem(agent, `Agent failed: ${errorMsg}`));
   } finally {
     runningAgentCount--;
   }
@@ -354,14 +353,7 @@ async function checkRunningAgents(): Promise<void> {
         const elapsed = Math.round((now - startedAt) / 1000 / 60);
         console.log(timestamp("relay"), `Agent ${agent.id} running for ${elapsed}m (stale status)`);
 
-        await writeOutbox({
-          source: "agent",
-          sourceId: agent.id,
-          task: agent.task,
-          result: `Agent "${agent.task}" still running (${elapsed}m elapsed)`,
-          chatId: agent.chatId,
-          createdAt: new Date().toISOString(),
-        });
+        await writeOutbox(agentOutboxItem(agent, `Agent "${agent.task}" still running (${elapsed}m elapsed)`));
 
         // Update lastStatusAt
         await updateAgent(agent.id, {
@@ -382,14 +374,7 @@ async function checkRunningAgents(): Promise<void> {
             error: "Agent stuck (>2h with dead PID)",
           }, agent._filename);
 
-          await writeOutbox({
-            source: "agent",
-            sourceId: agent.id,
-            task: agent.task,
-            result: `Agent "${agent.task}" stuck and marked as failed`,
-            chatId: agent.chatId,
-            createdAt: new Date().toISOString(),
-          });
+          await writeOutbox(agentOutboxItem(agent, `Agent "${agent.task}" stuck and marked as failed`));
         }
       }
     }
@@ -406,7 +391,7 @@ const OUTBOX_DIR = join(MUAVIN_DIR, "outbox");
 const outboxWatcher = watch(OUTBOX_DIR, () => {
   if (outboxDebounceTimer) clearTimeout(outboxDebounceTimer);
   outboxDebounceTimer = setTimeout(() => {
-    outboxQueue.push("check");
+    outboxPending = true;
     scheduleQueue();
   }, 2000);
 });
@@ -431,7 +416,7 @@ const agentCheckInterval = setInterval(() => {
 }, 30000);
 
 const outboxCheckInterval = setInterval(() => {
-  outboxQueue.push("check");
+  outboxPending = true;
   scheduleQueue();
 }, 30000);
 
@@ -586,48 +571,33 @@ async function sendChunk(ctx: Context, formatted: string, plain: string): Promis
   }
 }
 
+function chunkText(text: string, maxLen: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) { chunks.push(remaining); break; }
+    let idx = remaining.lastIndexOf("\n\n", maxLen);
+    if (idx <= 0) idx = remaining.lastIndexOf("\n", maxLen);
+    if (idx <= 0) idx = remaining.lastIndexOf(" ", maxLen);
+    if (idx <= 0) idx = maxLen;
+    chunks.push(remaining.slice(0, idx));
+    remaining = remaining.slice(idx).trim();
+  }
+  return chunks;
+}
+
 async function sendResponse(ctx: Context, response: string): Promise<void> {
   const formatted = toTelegramMarkdown(response);
   const MAX = 4000;
 
-  // Single chunk case
   if (formatted.length <= MAX) {
     await sendChunk(ctx, formatted, response);
     return;
   }
 
-  // Multi-chunk case: chunk both formatted and plain versions
-  const formattedChunks: string[] = [];
-  let remaining = formatted;
-  while (remaining.length > 0) {
-    if (remaining.length <= MAX) {
-      formattedChunks.push(remaining);
-      break;
-    }
-    let idx = remaining.lastIndexOf("\n\n", MAX);
-    if (idx <= 0) idx = remaining.lastIndexOf("\n", MAX);
-    if (idx <= 0) idx = remaining.lastIndexOf(" ", MAX);
-    if (idx <= 0) idx = MAX;
-    formattedChunks.push(remaining.slice(0, idx));
-    remaining = remaining.slice(idx).trim();
-  }
+  const formattedChunks = chunkText(formatted, MAX);
+  const plainChunks = chunkText(response, MAX);
 
-  const plainChunks: string[] = [];
-  remaining = response;
-  while (remaining.length > 0) {
-    if (remaining.length <= MAX) {
-      plainChunks.push(remaining);
-      break;
-    }
-    let idx = remaining.lastIndexOf("\n\n", MAX);
-    if (idx <= 0) idx = remaining.lastIndexOf("\n", MAX);
-    if (idx <= 0) idx = remaining.lastIndexOf(" ", MAX);
-    if (idx <= 0) idx = MAX;
-    plainChunks.push(remaining.slice(0, idx));
-    remaining = remaining.slice(idx).trim();
-  }
-
-  // Send each chunk with its fallback
   for (let i = 0; i < formattedChunks.length; i++) {
     await sendChunk(ctx, formattedChunks[i], plainChunks[i] ?? formattedChunks[i]);
   }
