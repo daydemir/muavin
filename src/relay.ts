@@ -624,7 +624,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     setTimeout(() => {
       console.error("Shutdown timed out, forcing exit");
       process.exit(1);
-    }, 8000).unref();
+    }, 65000).unref();
 
     // Stop intervals and watchers
     clearInterval(agentCheckInterval);
@@ -634,10 +634,10 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 
     await bot.stop();
 
-    // Wait up to 5s for children to complete naturally
+    // Wait up to 60s for children to complete naturally
     if (activeChildPids.size > 0) {
       console.log(`Waiting for ${activeChildPids.size} child processes to complete...`);
-      const completed = await waitForChildren(5000);
+      const completed = await waitForChildren(60000);
       if (completed) {
         console.log("All children completed gracefully");
       } else {
