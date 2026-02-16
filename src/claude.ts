@@ -126,6 +126,14 @@ export async function callClaude(prompt: string, opts?: {
   return processPromise;
 }
 
+export async function waitForChildren(timeoutMs: number): Promise<boolean> {
+  const startTime = Date.now();
+  while (activeChildPids.size > 0 && Date.now() - startTime < timeoutMs) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  return activeChildPids.size === 0;
+}
+
 export async function killAllChildren(): Promise<void> {
   const pids = Array.from(activeChildPids);
   for (const pid of pids) {

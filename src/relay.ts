@@ -3,7 +3,7 @@ import { Bot, type Context } from "grammy";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import { watch } from "fs";
 import { join } from "path";
-import { callClaude, killAllChildren } from "./claude";
+import { callClaude, killAllChildren, waitForChildren, activeChildPids } from "./claude";
 import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
@@ -620,7 +620,7 @@ async function sendResponse(ctx: Context, response: string): Promise<void> {
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
-    console.log(`Received ${sig}, shutting down...`);
+    console.log(`Received ${sig}, shutting down gracefully...`);
     setTimeout(() => {
       console.error("Shutdown timed out, forcing exit");
       process.exit(1);
@@ -633,7 +633,19 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     agentWatcher.close();
 
     await bot.stop();
-    await killAllChildren();
+
+    // Wait up to 5s for children to complete naturally
+    if (activeChildPids.size > 0) {
+      console.log(`Waiting for ${activeChildPids.size} child processes to complete...`);
+      const completed = await waitForChildren(5000);
+      if (completed) {
+        console.log("All children completed gracefully");
+      } else {
+        console.log(`Force-killing ${activeChildPids.size} remaining children`);
+        await killAllChildren();
+      }
+    }
+
     await releaseLock("relay");
     process.exit(0);
   });
