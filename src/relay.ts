@@ -63,6 +63,9 @@ if (!(await acquireLock("relay"))) {
   process.exit(1);
 }
 
+// Write relay start timestamp for heartbeat error filtering
+await writeFile(join(MUAVIN_DIR, "relay-started-at"), Date.now().toString(), "utf-8");
+
 // ── Per-chat sessions ───────────────────────────────────────
 
 interface SessionState {

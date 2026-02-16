@@ -134,11 +134,24 @@ async function checkErrorLogs(lastRun: number): Promise<string | null> {
     join(homedir(), "Library/Logs/muavin-relay.error.log"),
     join(homedir(), "Library/Logs/muavin-jobs.error.log"),
   ];
+
+  // Read relay start timestamp (if exists)
+  let relayStartTime = 0;
+  try {
+    const startFile = join(MUAVIN_DIR, "relay-started-at");
+    const startStr = await readFile(startFile, "utf-8");
+    relayStartTime = parseInt(startStr.trim(), 10);
+  } catch {
+    // If file doesn't exist, fall back to lastRun
+    relayStartTime = lastRun;
+  }
+
   const recentErrors: string[] = [];
   for (const logFile of logFiles) {
     try {
       const s = await stat(logFile);
-      if (s.mtimeMs > lastRun && s.size > 0) {
+      // Use relayStartTime instead of lastRun for filtering
+      if (s.mtimeMs > relayStartTime && s.size > 0) {
         const content = await readFile(logFile, "utf-8");
         const lines = content.split("\n").filter(l => l.trim());
         const last = lines.slice(-5);
