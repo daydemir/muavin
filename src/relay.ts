@@ -4,7 +4,7 @@ import { writeFile, mkdir, unlink } from "fs/promises";
 import { watch } from "fs";
 import { join } from "path";
 import { callClaude, killAllChildren, waitForChildren, activeChildPids } from "./claude";
-import { logMessage } from "./memory";
+import { logMessage, extractMemories } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
 import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, claimOutboxItems, restoreUndeliveredOutbox, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
@@ -34,6 +34,11 @@ const CHECK_INTERVAL_MS = 30000;
 const STALE_STATUS_MS = 5 * 60 * 1000;
 const STUCK_AGENT_MS = 2 * 60 * 60 * 1000;
 const TELEGRAM_MAX_LENGTH = 4000;
+
+// ── Correction detection ──────────────────────────────────────
+function looksLikeCorrection(text: string): boolean {
+  return /\b(remember|whenever I say|always|never|from now on|going forward|correction|actually|meant|note that)\b/i.test(text);
+}
 
 // ── Allow list from config ─────────────────────────────────
 const config = await loadConfig();
@@ -183,6 +188,11 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     // Log messages async (don't block reply)
     logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
     logMessage("assistant", result.text, chatId).catch(e => console.error('logMessage failed:', e));
+
+    // Trigger immediate extraction if user message looks like a correction
+    if (looksLikeCorrection(prompt)) {
+      extractMemories().catch(e => console.error('Immediate extraction failed:', e));
+    }
 
     // Check if Claude wants to skip (internal signal, not sent to user)
     if (isSkipResponse(result.text)) {
