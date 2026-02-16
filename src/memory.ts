@@ -77,17 +77,14 @@ export async function logMessage(
   content: string,
   chatId: string,
 ): Promise<void> {
-  const embedding = await embed(content).catch(e => {
-    console.error("logMessage embed failed, storing without embedding:", e);
-    return null;
-  });
+  const embedding = await embed(content);
   const { error } = await supabase.from("messages").insert({
     role,
     content,
     chat_id: chatId,
     embedding,
   });
-  if (error) console.error("logMessage insert failed:", error);
+  if (error) throw new Error(`logMessage insert failed: ${error.message}`);
 }
 
 async function searchRpc(

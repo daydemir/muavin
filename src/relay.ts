@@ -184,9 +184,9 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     };
     await saveSessions(sessions);
 
-    // Log messages async (don't block reply)
-    logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
-    logMessage("assistant", result.text, chatId).catch(e => console.error('logMessage failed:', e));
+    // Log messages (block reply if persistence fails to keep telegram/supabase in sync)
+    await logMessage("user", prompt, chatId);
+    await logMessage("assistant", result.text, chatId);
 
     // Check if Claude wants to skip (internal signal, not sent to user)
     if (isSkipResponse(result.text)) {
@@ -203,8 +203,8 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     console.error("Error in processUserMessage:", error);
     const errorMsg = `Error: ${formatError(error)}`;
     const chatId = String(ctx.chat?.id ?? "");
-    logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
-    logMessage("assistant", errorMsg, chatId).catch(e => console.error('logMessage failed:', e));
+    await logMessage("user", prompt, chatId);
+    await logMessage("assistant", errorMsg, chatId);
     await ctx.reply(errorMsg);
   } finally {
     clearInterval(typingInterval);
@@ -533,9 +533,9 @@ bot.on("message:photo", async (ctx) => {
     await handleMessage(ctx, `[User sent a file: ${filePath}] ${caption}`);
   } catch (error) {
     console.error("Photo error:", error);
-    await ctx.reply("Could not process photo.");
     const chatId = String(ctx.chat?.id ?? "");
-    logMessage("assistant", "Could not process photo.", chatId).catch(e => console.error('logMessage failed:', e));
+    await logMessage("assistant", "Could not process photo.", chatId);
+    await ctx.reply("Could not process photo.");
   }
 });
 
@@ -559,9 +559,9 @@ bot.on("message:document", async (ctx) => {
     await handleMessage(ctx, `[User sent a file: ${filePath}] ${caption}`);
   } catch (error) {
     console.error("Document error:", error);
-    await ctx.reply("Could not process document.");
     const chatId = String(ctx.chat?.id ?? "");
-    logMessage("assistant", "Could not process document.", chatId).catch(e => console.error('logMessage failed:', e));
+    await logMessage("assistant", "Could not process document.", chatId);
+    await ctx.reply("Could not process document.");
   }
 });
 
