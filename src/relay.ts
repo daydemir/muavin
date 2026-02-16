@@ -233,7 +233,7 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
       `${idx + 1}. [${item.source}${item.sourceId ? `:${item.sourceId}` : ""}] ${item.task ?? ""}:\n${item.result}`
     ).join("\n\n");
 
-    const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIf none are worth delivering (redundant, low-value, or already covered in recent conversation), respond with exactly "SKIP".`;
+    const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIMPORTANT:\n- Check [Recent Messages] in your context for any prior discussion of these topics\n- If an issue was already delivered or discussed within the last 20 messages, respond with SKIP\n- Do not acknowledge redundancy ("already covered this...") and then re-explain — just SKIP\n- Only deliver genuinely new information or actionable updates\n- Be aggressive about silence on known issues\n\nIf nothing is worth delivering, respond with exactly: SKIP\n\nIf delivering, be concise and focus only on what's new or actionable.`;
 
     const result = await callClaude(prompt, {
       appendSystemPrompt,
