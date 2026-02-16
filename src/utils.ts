@@ -175,6 +175,23 @@ export async function clearOutboxItems(filenames: string[]): Promise<void> {
   }
 }
 
+export async function claimOutboxItems(filenames: string[]): Promise<void> {
+  for (const filename of filenames) {
+    await rename(join(OUTBOX_DIR, filename), join(OUTBOX_DIR, `${filename}.processing`)).catch(() => {});
+  }
+}
+
+export async function restoreUndeliveredOutbox(): Promise<void> {
+  await mkdir(OUTBOX_DIR, { recursive: true });
+  const files = await readdir(OUTBOX_DIR);
+  for (const file of files) {
+    if (file.endsWith(".processing")) {
+      const original = file.slice(0, -".processing".length);
+      await rename(join(OUTBOX_DIR, file), join(OUTBOX_DIR, original)).catch(() => {});
+    }
+  }
+}
+
 // ── Shell helpers ───────────────────────────────────────────
 
 export async function execCmd(cmd: string[], cwd: string): Promise<void> {

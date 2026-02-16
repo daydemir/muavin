@@ -1,6 +1,6 @@
 import { readFile, readdir, mkdir, unlink, stat } from "fs/promises";
 import { join } from "path";
-import { MUAVIN_DIR, loadJson, saveJson, timeAgo } from "./utils";
+import { MUAVIN_DIR, loadJson, saveJson, timeAgo, timestamp } from "./utils";
 import type { Job } from "./jobs";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
@@ -101,7 +101,13 @@ export async function updateAgent(
     const { _filename, ...rest } = { ...data, ...updates };
     await saveJson(filePath, rest);
   });
-  writeLocks.set(key, current.catch(() => {}));
+  const wrapped = current.catch((e) => {
+    console.error(timestamp("agents"), `updateAgent write failed for ${key}:`, e);
+  });
+  writeLocks.set(key, wrapped);
+  wrapped.finally(() => {
+    if (writeLocks.get(key) === wrapped) writeLocks.delete(key);
+  });
   await current;
 }
 

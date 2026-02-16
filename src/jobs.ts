@@ -18,6 +18,7 @@ export interface Job {
   model?: string;
   enabled: boolean;
   skipContext?: boolean;
+  timeoutMs?: number;
 }
 
 export const DEFAULT_JOBS: Job[] = [
@@ -145,7 +146,7 @@ function expandCronField(field: string, min: number, max: number): number[] {
       values.add(parseInt(trimmed));
     }
   }
-  return [...values].sort((a, b) => a - b);
+  return [...values].filter(v => v >= min && v <= max).sort((a, b) => a - b);
 }
 
 export function cronToLaunchd(schedule: string): LaunchdSchedule {
@@ -159,6 +160,9 @@ export function cronToLaunchd(schedule: string): LaunchdSchedule {
   const hours = expandCronField(hourField, 0, 23);
 
   const intervals = hours.flatMap(h => minutes.map(m => ({ Hour: h, Minute: m })));
+  if (intervals.length === 0) {
+    throw new Error(`Cron expression "${schedule}" produced no valid intervals`);
+  }
 
   if (intervals.length === 1) {
     return { StartCalendarInterval: intervals[0] };

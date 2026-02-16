@@ -7,7 +7,7 @@ import { callClaude, killAllChildren } from "./claude";
 import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
-import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
+import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, claimOutboxItems, restoreUndeliveredOutbox, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
 
 validateEnv();
@@ -25,6 +25,15 @@ process.on("uncaughtException", (err) => {
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const SESSIONS_FILE = join(MUAVIN_DIR, "sessions.json");
 const UPLOADS_DIR = join(MUAVIN_DIR, "uploads");
+
+// ── Constants ────────────────────────────────────────────────
+const TYPING_INTERVAL_MS = 4000;
+const OUTBOX_DEBOUNCE_MS = 2000;
+const AGENT_DEBOUNCE_MS = 1000;
+const CHECK_INTERVAL_MS = 30000;
+const STALE_STATUS_MS = 5 * 60 * 1000;
+const STUCK_AGENT_MS = 2 * 60 * 60 * 1000;
+const TELEGRAM_MAX_LENGTH = 4000;
 
 // ── Allow list from config ─────────────────────────────────
 const config = await loadConfig();
@@ -109,9 +118,11 @@ async function drainQueues(): Promise<void> {
 
           const success = await sendAndLog(config.owner, delivery.text, { parseMode: "Markdown" });
           if (success) {
+            await clearOutboxItems(delivery.claimedFiles);
             console.log(timestamp("relay"), "Delivered outbox item(s) to owner");
           } else {
-            console.error(timestamp("relay"), "Outbox delivery send failed");
+            console.error(timestamp("relay"), "Outbox delivery send failed, restoring items");
+            await restoreUndeliveredOutbox();
           }
         }
       } else {
@@ -126,7 +137,7 @@ async function drainQueues(): Promise<void> {
 async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
   const typingInterval = setInterval(() => {
     ctx.replyWithChatAction("typing").catch(() => {});
-  }, 4000);
+  }, TYPING_INTERVAL_MS);
 
   try {
     // Build context
@@ -198,6 +209,7 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
 
 interface OutboxDelivery {
   text: string;
+  claimedFiles: string[];
 }
 
 async function prepareOutbox(): Promise<OutboxDelivery | null> {
@@ -205,8 +217,8 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
     const outboxItems = await readOutbox();
     if (outboxItems.length === 0) return null;
 
-    // Clear immediately — prevents re-delivery on restart
-    await clearOutboxItems(outboxItems.map(i => i._filename));
+    // Claim items (rename to .processing) — originals restored on failure
+    await claimOutboxItems(outboxItems.map(i => i._filename));
 
     // Build voice context
     const appendSystemPrompt = await buildContext({
@@ -235,9 +247,10 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
       return null;
     }
 
-    return { text: result.text };
+    return { text: result.text, claimedFiles: outboxItems.map(i => `${i._filename}.processing`) };
   } catch (error) {
     console.error(timestamp("relay"), "Error in prepareOutbox:", error);
+    await restoreUndeliveredOutbox();
     return null;
   }
 }
@@ -349,7 +362,7 @@ async function checkRunningAgents(): Promise<void> {
       const startedAt = agent.startedAt ? new Date(agent.startedAt).getTime() : 0;
 
       // Check for stale status (>5min since last update)
-      if (lastStatusAt > 0 && now - lastStatusAt > 5 * 60 * 1000) {
+      if (lastStatusAt > 0 && now - lastStatusAt > STALE_STATUS_MS) {
         const elapsed = Math.round((now - startedAt) / 1000 / 60);
         console.log(timestamp("relay"), `Agent ${agent.id} running for ${elapsed}m (stale status)`);
 
@@ -362,7 +375,7 @@ async function checkRunningAgents(): Promise<void> {
       }
 
       // Check for stuck agents (>2h with dead PID)
-      if (startedAt > 0 && now - startedAt > 2 * 60 * 60 * 1000) {
+      if (startedAt > 0 && now - startedAt > STUCK_AGENT_MS) {
         const pidAlive = agent.pid ? isPidAlive(agent.pid) : false;
 
         if (!pidAlive) {
@@ -393,7 +406,7 @@ const outboxWatcher = watch(OUTBOX_DIR, () => {
   outboxDebounceTimer = setTimeout(() => {
     outboxPending = true;
     scheduleQueue();
-  }, 2000);
+  }, OUTBOX_DEBOUNCE_MS);
 });
 
 // ── Agent directory watcher ─────────────────────────────────
@@ -405,7 +418,7 @@ const agentWatcher = watch(AGENTS_DIR, () => {
   if (agentDebounceTimer) clearTimeout(agentDebounceTimer);
   agentDebounceTimer = setTimeout(() => {
     checkPendingAgents().catch(e => console.error("checkPendingAgents error:", e));
-  }, 1000);
+  }, AGENT_DEBOUNCE_MS);
 });
 
 // ── Agent check interval ────────────────────────────────────
@@ -413,12 +426,12 @@ const agentWatcher = watch(AGENTS_DIR, () => {
 const agentCheckInterval = setInterval(() => {
   checkPendingAgents().catch(e => console.error("checkPendingAgents error:", e));
   checkRunningAgents().catch(e => console.error("checkRunningAgents error:", e));
-}, 30000);
+}, CHECK_INTERVAL_MS);
 
 const outboxCheckInterval = setInterval(() => {
   outboxPending = true;
   scheduleQueue();
-}, 30000);
+}, CHECK_INTERVAL_MS);
 
 // Check pending agents once at startup
 checkPendingAgents().catch(e => console.error("checkPendingAgents error:", e));
@@ -588,7 +601,7 @@ function chunkText(text: string, maxLen: number): string[] {
 
 async function sendResponse(ctx: Context, response: string): Promise<void> {
   const formatted = toTelegramMarkdown(response);
-  const MAX = 4000;
+  const MAX = TELEGRAM_MAX_LENGTH;
 
   if (formatted.length <= MAX) {
     await sendChunk(ctx, formatted, response);
@@ -635,6 +648,9 @@ watch(join(MUAVIN_DIR, "jobs.json"), () => {
 });
 
 // ── Start ───────────────────────────────────────────────────
+
+// Restore any outbox items left in .processing state from a previous crash
+await restoreUndeliveredOutbox();
 
 console.log("Starting Muavin relay...");
 

@@ -93,7 +93,8 @@ Common self-service operations:
 ## Config
 
 - `model` in `~/.muavin/config.json` controls which Claude model Muavin uses (valid: "sonnet", "opus", "haiku")
-- `recentMessageCount` controls how many recent messages are included in context (default: 10)
+- `recentMessageCount` controls how many recent messages are included in context (default: 20 for chat, 100 for jobs)
+- `timeoutMs` on a job entry overrides the global `jobTimeoutMs` for that job (in milliseconds)
 
 ## API Keys
 

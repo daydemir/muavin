@@ -3,7 +3,7 @@ import { join } from "path";
 import { callClaude } from "./claude";
 import { runHealthCheck, extractMemories } from "./memory";
 import { cleanupAgents, buildContext, cleanupUploads } from "./agents";
-import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime, formatError, type Config } from "./utils";
+import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime, formatError, acquireLock, releaseLock, type Config } from "./utils";
 import type { Job } from "./jobs";
 
 validateEnv();
@@ -30,6 +30,12 @@ if (!allJobs) {
 const job = allJobs.find((j) => j.id === jobId);
 if (!job || !job.enabled) {
   console.log(`[${jobId}] job not found or disabled, exiting`);
+  process.exit(0);
+}
+
+// Prevent overlapping runs of the same job
+if (!(await acquireLock(`job-${jobId}`))) {
+  console.log(`[${jobId}] already running, skipping`);
   process.exit(0);
 }
 
@@ -75,7 +81,7 @@ try {
     const result = await callClaude(fullPrompt, {
       noSessionPersistence: true,
       maxTurns: config.jobMaxTurns ?? 100,
-      timeoutMs: config.jobTimeoutMs ?? 600000,
+      timeoutMs: job.timeoutMs ?? config.jobTimeoutMs ?? 600000,
       appendSystemPrompt,
       model: job.model,
     });
@@ -106,9 +112,18 @@ try {
   }).catch(e => console.error(`[${jobId}] failed to write error to outbox:`, e));
 }
 
-// Update job-state.json
-const state = (await loadJson<JobState>(STATE_FILE)) ?? {};
-state[jobId] = Date.now();
-await saveJson(STATE_FILE, state);
+// Update job-state.json (locked to prevent concurrent read-modify-write)
+const locked = (await acquireLock("job-state")) || (await Bun.sleep(100).then(() => acquireLock("job-state")));
+if (locked) {
+  try {
+    const state = (await loadJson<JobState>(STATE_FILE)) ?? {};
+    state[jobId] = Date.now();
+    await saveJson(STATE_FILE, state);
+  } finally {
+    await releaseLock("job-state");
+  }
+}
+
+await releaseLock(`job-${jobId}`);
 
 console.log(`[${jobId}] done`);
