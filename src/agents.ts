@@ -86,15 +86,23 @@ export async function getAgent(id: string): Promise<AgentFile | null> {
   }
 }
 
+const writeLocks = new Map<string, Promise<void>>();
+
 export async function updateAgent(
   id: string,
   updates: Partial<AgentFile>,
   filename?: string,
 ): Promise<void> {
-  const filePath = join(AGENTS_DIR, filename ?? `${id}.json`);
-  const current = JSON.parse(await readFile(filePath, "utf-8")) as AgentFile;
-  const { _filename, ...rest } = { ...current, ...updates };
-  await saveJson(filePath, rest);
+  const key = filename ?? `${id}.json`;
+  const prev = writeLocks.get(key) ?? Promise.resolve();
+  const current = prev.then(async () => {
+    const filePath = join(AGENTS_DIR, key);
+    const data = JSON.parse(await readFile(filePath, "utf-8")) as AgentFile;
+    const { _filename, ...rest } = { ...data, ...updates };
+    await saveJson(filePath, rest);
+  });
+  writeLocks.set(key, current.catch(() => {}));
+  await current;
 }
 
 export async function listAgents(filter?: {

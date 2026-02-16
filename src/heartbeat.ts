@@ -10,7 +10,7 @@ import { homedir } from "os";
 import { sendTelegram } from "./telegram";
 import { listAgents, updateAgent } from "./agents";
 import { callClaude } from "./claude";
-import { MUAVIN_DIR, loadConfig, writeOutbox, isSkipResponse, isPidAlive } from "./utils";
+import { MUAVIN_DIR, loadConfig, writeOutbox, isSkipResponse, isPidAlive, formatError } from "./utils";
 import { EMBEDDING_DIMS, EMBEDDING_MODEL } from "./constants";
 
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
@@ -98,7 +98,7 @@ async function checkSupabase(): Promise<string | null> {
     if (error) return `Supabase error: ${error.message}`;
     return null;
   } catch (e) {
-    return `Supabase unreachable: ${e instanceof Error ? e.message : String(e)}`;
+    return `Supabase unreachable: ${formatError(e)}`;
   }
 }
 
@@ -115,7 +115,7 @@ async function checkOpenAI(): Promise<string | null> {
     if (!res.ok) throw new Error(`OpenAI API error: ${res.status}`);
     return null;
   } catch (e) {
-    return `OpenAI unreachable: ${e instanceof Error ? e.message : String(e)}`;
+    return `OpenAI unreachable: ${formatError(e)}`;
   }
 }
 
@@ -125,7 +125,7 @@ async function checkTelegram(): Promise<string | null> {
     await bot.api.getMe();
     return null;
   } catch (e) {
-    return `Telegram API error: ${e instanceof Error ? e.message : String(e)}`;
+    return `Telegram API error: ${formatError(e)}`;
   }
 }
 
@@ -256,7 +256,7 @@ async function main() {
         failures[i] = "Job plists re-synced";
         console.log("Job plists re-synced");
       } catch (e) {
-        failures[i] = `Job plist sync failed: ${e instanceof Error ? e.message : e}`;
+        failures[i] = `Job plist sync failed: ${formatError(e)}`;
       }
     }
   }

@@ -28,54 +28,55 @@ export async function sendTelegram(
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN not set");
 
-  const body: { chat_id: number; text: string; parse_mode?: string } = {
-    chat_id: chatId,
-    text: opts?.parseMode ? toTelegramMarkdown(text) : text,
-  };
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  let parseMode = opts?.parseMode;
 
-  if (opts?.parseMode) {
-    body.parse_mode = opts.parseMode;
-  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const body: { chat_id: number; text: string; parse_mode?: string } = {
+      chat_id: chatId,
+      text: parseMode ? toTelegramMarkdown(text) : text,
+    };
+    if (parseMode) body.parse_mode = parseMode;
 
-  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    keepalive: false,
-    headers: { "Content-Type": "application/json", "Connection": "close" },
-    body: JSON.stringify(body),
-  } as RequestInit);
-
-  if (!res.ok) {
-    const responseBody = await res.text().catch(() => "");
-    console.error(`sendTelegram failed: ${res.status} ${responseBody}`);
-
-    // Retry without parse_mode on 400 error if parse_mode was set
-    if (res.status === 400 && opts?.parseMode) {
-      console.log("Retrying without parse_mode due to 400 error");
-      const plainBody = {
-        chat_id: chatId,
-        text,
-      };
-
-      const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    try {
+      const res = await fetch(url, {
         method: "POST",
         keepalive: false,
         headers: { "Content-Type": "application/json", "Connection": "close" },
-        body: JSON.stringify(plainBody),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000),
       } as RequestInit);
 
-      if (!retryRes.ok) {
-        const retryResponseBody = await retryRes.text().catch(() => "");
-        console.error(`sendTelegram retry failed: ${retryRes.status} ${retryResponseBody}`);
-        return false;
+      if (res.ok) return true;
+
+      const responseBody = await res.text().catch(() => "");
+      console.error(`sendTelegram failed (attempt ${attempt + 1}): ${res.status} ${responseBody}`);
+
+      // 400 with parseMode → retry without markdown
+      if (res.status === 400 && parseMode) {
+        parseMode = undefined;
+        continue;
       }
 
-      return true;
-    }
+      // 5xx → retry with backoff
+      if (res.status >= 500) {
+        await Bun.sleep((attempt + 1) * 1000);
+        continue;
+      }
 
-    return false;
+      // Other 4xx → fail immediately
+      return false;
+    } catch (e) {
+      console.error(`sendTelegram error (attempt ${attempt + 1}):`, e);
+      if (attempt < 2) {
+        await Bun.sleep((attempt + 1) * 1000);
+        continue;
+      }
+      return false;
+    }
   }
 
-  return true;
+  return false;
 }
 
 export async function sendAndLog(

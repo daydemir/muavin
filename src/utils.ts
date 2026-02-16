@@ -113,6 +113,9 @@ export function timestamp(prefix: string): string {
 export const isSkipResponse = (text: string): boolean =>
   text.trim().toUpperCase().endsWith("SKIP");
 
+export const formatError = (e: unknown): string =>
+  e instanceof Error ? e.message : String(e);
+
 export function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60_000);

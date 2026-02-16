@@ -3,7 +3,7 @@ import { join } from "path";
 import { callClaude } from "./claude";
 import { runHealthCheck, extractMemories } from "./memory";
 import { cleanupAgents, buildContext, cleanupUploads } from "./agents";
-import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime } from "./utils";
+import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime, formatError, type Config } from "./utils";
 import type { Job } from "./jobs";
 
 validateEnv();
@@ -38,18 +38,30 @@ const now = new Date();
 
 console.log(`[${jobId}] running...`);
 
-try {
-  if (job.action === "memory-health") {
+type ActionHandler = (job: Job, config: Config) => Promise<void>;
+
+const actions: Record<string, ActionHandler> = {
+  "memory-health": async (job) => {
     await runHealthCheck(job.model);
-    console.log(`[${jobId}] health check complete`);
-  } else if (job.action === "extract-memories") {
+    console.log(`[${job.id}] health check complete`);
+  },
+  "extract-memories": async (job) => {
     const extracted = await extractMemories(job.model);
-    console.log(`[${jobId}] extracted ${extracted} memories`);
-  } else if (job.action === "cleanup-agents") {
+    console.log(`[${job.id}] extracted ${extracted} memories`);
+  },
+  "cleanup-agents": async (job, config) => {
     const retentionDays = config.cleanupRetentionDays ?? 7;
     const cleanedAgents = await cleanupAgents(retentionDays * 24 * 60 * 60_000);
     const cleanedUploads = await cleanupUploads(24 * 60 * 60_000);
-    console.log(`[${jobId}] cleaned ${cleanedAgents} old agent files, ${cleanedUploads} old uploads`);
+    console.log(`[${job.id}] cleaned ${cleanedAgents} old agent files, ${cleanedUploads} old uploads`);
+  },
+};
+
+try {
+  const handler = job.action ? actions[job.action] : undefined;
+
+  if (handler) {
+    await handler(job, config);
   } else if (job.prompt) {
     const timeStr = formatLocalTime(now);
     const fullPrompt = `[Job: ${jobId}] Time: ${timeStr}\n\n${job.prompt}`;
@@ -84,12 +96,11 @@ try {
   }
 } catch (error) {
   console.error(`[${jobId}] error:`, error);
-  // Notify owner of job failure via outbox
   await writeOutbox({
     source: "job",
     sourceId: jobId,
     task: job.name || jobId,
-    result: `Job "${job.name || jobId}" failed: ${error instanceof Error ? error.message : String(error)}`,
+    result: `Job "${job.name || jobId}" failed: ${formatError(error)}`,
     chatId: config.owner,
     createdAt: new Date().toISOString(),
   }).catch(e => console.error(`[${jobId}] failed to write error to outbox:`, e));

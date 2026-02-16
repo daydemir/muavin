@@ -1,19 +1,23 @@
 import { validateEnv } from "./env";
 import { Bot, type Context } from "grammy";
-import { writeFile, readFile, mkdir, unlink } from "fs/promises";
+import { writeFile, mkdir, unlink } from "fs/promises";
 import { watch } from "fs";
 import { join } from "path";
 import { callClaude, killAllChildren } from "./claude";
 import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
-import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, writeOutbox, readOutbox, clearOutboxItems, timestamp, isSkipResponse, formatLocalTime, isPidAlive } from "./utils";
+import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
 
 validateEnv();
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
 });
 
 // ── Config ──────────────────────────────────────────────────
@@ -55,11 +59,7 @@ interface SessionState {
 type SessionMap = Record<string, SessionState>;
 
 async function loadSessions(): Promise<SessionMap> {
-  try {
-    return JSON.parse(await readFile(SESSIONS_FILE, "utf-8"));
-  } catch {
-    return {};
-  }
+  return await loadJson<SessionMap>(SESSIONS_FILE) ?? {};
 }
 
 async function saveSessions(map: SessionMap): Promise<void> {
@@ -186,7 +186,7 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     }
   } catch (error) {
     console.error("Error in processUserMessage:", error);
-    const errorMsg = `Error: ${error instanceof Error ? error.message : "Unknown error"}`;
+    const errorMsg = `Error: ${formatError(error)}`;
     const chatId = String(ctx.chat?.id ?? "");
     logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
     logMessage("assistant", errorMsg, chatId).catch(e => console.error('logMessage failed:', e));
@@ -323,7 +323,7 @@ async function runAgent(agent: AgentFile): Promise<void> {
     await writeOutbox(agentOutboxItem(agent, result.text));
   } catch (error) {
     // Mark as failed
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = formatError(error);
     await updateAgent(agent.id, {
       status: "failed",
       completedAt: new Date().toISOString(),
@@ -507,7 +507,7 @@ bot.on("message:photo", async (ctx) => {
     const filePath = join(UPLOADS_DIR, `photo_${Date.now()}.jpg`);
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
-      { keepalive: false } as RequestInit,
+      { keepalive: false, signal: AbortSignal.timeout(30_000) } as RequestInit,
     );
     if (!res.ok) throw new Error(`Photo download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
@@ -533,7 +533,7 @@ bot.on("message:document", async (ctx) => {
 
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
-      { keepalive: false } as RequestInit,
+      { keepalive: false, signal: AbortSignal.timeout(30_000) } as RequestInit,
     );
     if (!res.ok) throw new Error(`Document download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
