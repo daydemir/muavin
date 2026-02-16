@@ -167,6 +167,10 @@ async function checkStuckAgents(): Promise<string | null> {
     if (stuck.length > 0) {
       // Recover stuck agents: mark as failed
       for (const agent of stuck) {
+        // Guard against race: skip if already completed or failed
+        if (agent.status === "completed" || agent.status === "failed") {
+          continue;
+        }
         await updateAgent(agent.id, {
           status: "failed",
           completedAt: new Date().toISOString(),
