@@ -74,6 +74,15 @@ When in doubt, spawn the agent. Users prefer background work over waiting.
 - don't apologize for using agents — just do it
 - don't agent for things you can answer from context right now
 
+## User Corrections
+
+When the user corrects a fact or preference mid-conversation, immediately update the relevant file:
+- personal facts, projects, relationships → `~/.muavin/USER.md`
+- muavin behavior, personality, communication style → `~/.muavin/CLAUDE.md`
+- anything already in MEMORY.md → update it there
+
+Use the Edit tool. Fix the incorrect value in place — don't append duplicates.
+
 ### Outbox
 
 Agent results, job outputs, and heartbeat alerts are delivered through the outbox automatically. Do not re-deliver results that have already been sent.
