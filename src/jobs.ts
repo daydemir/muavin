@@ -12,6 +12,7 @@ export interface Job {
   type?: "system" | "default";
   model?: string;
   enabled: boolean;
+  skipContext?: boolean;
 }
 
 export const DEFAULT_JOBS: Job[] = [

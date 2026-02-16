@@ -53,11 +53,13 @@ try {
   } else if (job.prompt) {
     const timeStr = formatLocalTime(now);
     const fullPrompt = `[Job: ${jobId}] Time: ${timeStr}\n\n${job.prompt}`;
-    const appendSystemPrompt = await buildContext({
-      query: job.prompt,
-      chatId: config.owner,
-      recentCount: config.recentMessageCount ?? 100,
-    });
+    const appendSystemPrompt = job.skipContext
+      ? ""
+      : await buildContext({
+          query: job.prompt,
+          chatId: config.owner,
+          recentCount: config.recentMessageCount ?? 100,
+        });
     const result = await callClaude(fullPrompt, {
       noSessionPersistence: true,
       maxTurns: config.jobMaxTurns ?? 100,
