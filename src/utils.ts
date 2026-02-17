@@ -43,20 +43,46 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
+function getPidStartTime(pid: number): string | null {
+  try {
+    const proc = Bun.spawnSync(["ps", "-o", "lstart=", "-p", pid.toString()]);
+    if (proc.exitCode !== 0) return null;
+    return Buffer.from(proc.stdout).toString("utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+
+interface LockData {
+  pid: number;
+  startTime: string | null;
+}
+
 export async function acquireLock(name: string): Promise<boolean> {
   const lockFile = join(MUAVIN_DIR, `${name}.lock`);
   try {
     const existing = await readFile(lockFile, "utf-8").catch(() => null);
     if (existing) {
-      const pid = parseInt(existing);
-      if (isPidAlive(pid)) {
+      let pid: number;
+      let startTime: string | null = null;
+      try {
+        const data = JSON.parse(existing) as LockData;
+        pid = data.pid;
+        startTime = data.startTime;
+      } catch {
+        pid = parseInt(existing);
+      }
+      const alive = isPidAlive(pid);
+      const sameProcess = startTime === null || getPidStartTime(pid) === startTime;
+      if (alive && sameProcess) {
         console.log(`Another instance running (PID: ${pid})`);
         return false;
       }
       console.log(`Stale lock detected (PID: ${pid}), removing lock file`);
       await unlink(lockFile);
     }
-    await writeFile(lockFile, process.pid.toString(), { flag: "wx" });
+    const lockData: LockData = { pid: process.pid, startTime: getPidStartTime(process.pid) };
+    await writeFile(lockFile, JSON.stringify(lockData), { flag: "wx" });
     return true;
   } catch (err: any) {
     if (err?.code === "EEXIST") return false;
