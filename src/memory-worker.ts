@@ -9,7 +9,7 @@
 import { validateEnv } from "./env";
 validateEnv();
 
-import { searchContext, getRecentMessages } from "./memory";
+import { searchContext, getRecentMessages, getAssistantMessages } from "./memory";
 
 const command = process.argv[2];
 const input = JSON.parse(await Bun.stdin.text());
@@ -21,6 +21,8 @@ try {
     result = await searchContext(input.query, input.limit ?? 3);
   } else if (command === "recent") {
     result = await getRecentMessages(input.chatId, input.limit ?? 20);
+  } else if (command === "assistant-messages") {
+    result = await getAssistantMessages(input.chatId, input.limit ?? 20);
   } else {
     throw new Error(`unknown command: ${command}`);
   }
