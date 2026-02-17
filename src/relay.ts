@@ -3,6 +3,7 @@ import { Bot, type Context } from "grammy";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import { watch } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 import { callClaude, killAllChildren, waitForChildren, activeChildPids } from "./claude";
 import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
@@ -61,6 +62,16 @@ if (!(await acquireLock("relay"))) {
 
 // Write relay start timestamp for heartbeat error filtering
 await writeFile(join(MUAVIN_DIR, "relay-started-at"), Date.now().toString(), "utf-8");
+
+// Truncate error logs on startup so stale errors don't pollute future analysis
+const LOG_DIR = join(homedir(), "Library/Logs");
+for (const logFile of ["muavin-relay.error.log", "muavin-jobs.error.log"]) {
+  try {
+    await writeFile(join(LOG_DIR, logFile), "", "utf-8");
+  } catch {
+    // ignore — log file may not exist yet
+  }
+}
 
 // ── Per-chat sessions ───────────────────────────────────────
 
