@@ -248,6 +248,7 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
 
     if (isSkipResponse(result.text)) {
       console.log(timestamp("relay"), "Outbox delivery skipped by voice");
+      await clearOutboxItems(outboxItems.map(i => `${i._filename}.processing`));
       return null;
     }
 

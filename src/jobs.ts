@@ -11,6 +11,7 @@ const jobIdFromPlist = (name: string) => name.slice(JOB_LABEL_PREFIX.length, -".
 export interface Job {
   id: string;
   name?: string;
+  description?: string;
   schedule: string;
   action?: string;
   prompt?: string;
@@ -55,7 +56,7 @@ export const DEFAULT_JOBS: Job[] = [
     enabled: true,
     prompt: `Review your own performance and make improvements. Check:
 
-1. Recent conversation messages (last 7 days) for patterns of user corrections, confusion, or frustration
+1. Recent conversation messages (last 7 days) for patterns of user corrections, confusion, or frustration. Pay special attention to emotional signals — frustrated corrections, repeated corrections on the same issue, expressions of impatience or confusion. These are highest-priority signals. Check whether past frustration points have been addressed or keep recurring.
 2. Agent delivery logs — any failed or skipped deliveries
 3. Job execution logs (~/Library/Logs/muavin-jobs.log) — any failures or bad output
 4. Memory store — stale, contradictory, or wrong facts
@@ -75,7 +76,7 @@ If nothing needs improvement, respond with exactly: SKIP`,
     type: "default",
     model: "opus",
     enabled: true,
-    prompt: `Review what you know about the user — recent conversations, memories, active projects, goals, and context. Suggest 1-2 actions you can take autonomously (without user involvement) that would genuinely help.
+    prompt: `Based on what you know about me and my goals, what are tasks you can do to get us closer to our missions? Review recent conversations, memories, active projects, and context — suggest 1-2 actions you can take autonomously (without user involvement) that would genuinely help.
 
 Think ambitiously. You have full command-line access, web search, file system, APIs, and can create agents for long-running tasks. Examples: research a topic they mentioned, set up a monitoring script, organize files, write a comparison doc, automate a repetitive workflow.
 

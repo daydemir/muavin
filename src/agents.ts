@@ -37,6 +37,7 @@ export interface AgentFile {
   id: string;
   status: "pending" | "running" | "completed" | "failed";
   task: string;
+  description?: string;
   prompt: string;
   chatId: number;
   createdAt: string;

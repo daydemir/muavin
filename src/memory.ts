@@ -185,6 +185,7 @@ export async function extractMemories(model?: string): Promise<number> {
 
       if (!result.structuredOutput) {
         console.error("extractMemories: no structuredOutput for chat", chatId, "— skipping (may be unsupported CLI version)");
+        console.error("extractMemories: full result text:", result.text);
         continue;
       }
 
@@ -244,6 +245,24 @@ export async function getRecentMessages(
   if (abortSignal) query = query.abortSignal(abortSignal);
   const { data, error } = await query;
 
+  if (error || !data) return [];
+  return data.reverse();
+}
+
+export async function getAssistantMessages(
+  chatId: string,
+  limit: number,
+  abortSignal?: AbortSignal,
+): Promise<Array<{ content: string; created_at: string }>> {
+  let query = supabase
+    .from("messages")
+    .select("content, created_at")
+    .eq("chat_id", chatId)
+    .eq("role", "assistant")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (abortSignal) query = query.abortSignal(abortSignal);
+  const { data, error } = await query;
   if (error || !data) return [];
   return data.reverse();
 }
