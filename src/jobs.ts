@@ -11,6 +11,7 @@ const jobIdFromPlist = (name: string) => name.slice(JOB_LABEL_PREFIX.length, -".
 export interface Job {
   id: string;
   name?: string;
+  description?: string;
   schedule: string;
   action?: string;
   prompt?: string;

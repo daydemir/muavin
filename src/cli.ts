@@ -1298,6 +1298,7 @@ async function statusCommand() {
         const name = (job.name || job.id).padEnd(20);
         const scheduleStr = job.schedule.padEnd(18);
         console.log(pc.dim(`  ${typeStr} ${statusStr} ${name} ${modelStr} ${scheduleStr} last: ${lastStr.padEnd(10)} next: ${nextStr}`) + (loadedStr ? ` ${loadedStr}` : ""));
+        if (job.description) console.log(pc.dim(`             ${job.description}`));
       }
     }
   } catch {
@@ -1320,6 +1321,7 @@ async function statusCommand() {
         for (const a of pending) {
           const modelTag = a.model ? ` [${a.model}]` : "";
           console.log(pc.dim(`  ${pc.yellow("pending")}   ${a.task}${modelTag} (created ${timeAgo(new Date(a.createdAt).getTime())})`));
+          if (a.description) console.log(pc.dim(`             ${a.description}`));
         }
       }
       if (running.length > 0) {
@@ -1327,6 +1329,7 @@ async function statusCommand() {
           const elapsed = a.startedAt ? timeAgo(new Date(a.startedAt).getTime()) : "?";
           const modelTag = a.model ? ` [${a.model}]` : "";
           console.log(pc.dim(`  ${pc.cyan("running")}   ${a.task}${modelTag} (started ${elapsed})`));
+          if (a.description) console.log(pc.dim(`             ${a.description}`));
         }
       }
       const recentCompleted = completed.slice(-5).reverse();
@@ -1335,6 +1338,7 @@ async function statusCommand() {
           const when = a.completedAt ? timeAgo(new Date(a.completedAt).getTime()) : "?";
           const modelTag = a.model ? ` [${a.model}]` : "";
           console.log(pc.dim(`  ${pc.green("done")}      ${a.task}${modelTag} (${when})`));
+          if (a.description) console.log(pc.dim(`             ${a.description}`));
         }
       }
       const recentFailed = failed.slice(-3).reverse();
@@ -1343,6 +1347,7 @@ async function statusCommand() {
           const when = a.completedAt ? timeAgo(new Date(a.completedAt).getTime()) : "?";
           const modelTag = a.model ? ` [${a.model}]` : "";
           console.log(pc.dim(`  ${pc.red("failed")}    ${a.task}${modelTag} (${when})`));
+          if (a.description) console.log(pc.dim(`             ${a.description}`));
         }
       }
     }
