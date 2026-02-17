@@ -25,7 +25,8 @@ interface HeartbeatState {
 
 async function loadState(): Promise<HeartbeatState> {
   try {
-    return JSON.parse(await readFile(STATE_PATH, "utf-8"));
+    const raw = JSON.parse(await readFile(STATE_PATH, "utf-8"));
+    return { lastRun: 0, lastAlertText: "", lastAlertAt: 0, lastFailuresHash: "", consecutiveFailures: {}, ...raw };
   } catch {
     return { lastRun: 0, lastAlertText: "", lastAlertAt: 0, lastFailuresHash: "", consecutiveFailures: {} };
   }
