@@ -1,7 +1,12 @@
 import { readFile, writeFile, unlink, readdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import { MUAVIN_DIR, loadJson, loadConfig, reloadService, getUid } from "./utils";
+import { MUAVIN_DIR, loadJson, loadConfig, reloadService, getUid, formatError } from "./utils";
+
+export const JOB_LABEL_PREFIX = "ai.muavin.job.";
+const jobLabel = (id: string) => `${JOB_LABEL_PREFIX}${id}`;
+const jobPlistName = (id: string) => `${JOB_LABEL_PREFIX}${id}.plist`;
+const jobIdFromPlist = (name: string) => name.slice(JOB_LABEL_PREFIX.length, -".plist".length);
 
 export interface Job {
   id: string;
@@ -12,6 +17,8 @@ export interface Job {
   type?: "system" | "default";
   model?: string;
   enabled: boolean;
+  skipContext?: boolean;
+  timeoutMs?: number;
 }
 
 export const DEFAULT_JOBS: Job[] = [
@@ -126,40 +133,41 @@ type LaunchdSchedule =
   | { StartCalendarInterval: { Hour: number; Minute: number } }
   | { StartCalendarInterval: Array<{ Hour: number; Minute: number }> };
 
+function expandCronField(field: string, min: number, max: number): number[] {
+  const values = new Set<number>();
+  for (const part of field.split(",")) {
+    const trimmed = part.trim();
+    if (trimmed === "*") {
+      for (let i = min; i <= max; i++) values.add(i);
+    } else if (trimmed.startsWith("*/")) {
+      const step = parseInt(trimmed.slice(2));
+      for (let i = min; i <= max; i += step) values.add(i);
+    } else {
+      values.add(parseInt(trimmed));
+    }
+  }
+  return [...values].filter(v => v >= min && v <= max).sort((a, b) => a - b);
+}
+
 export function cronToLaunchd(schedule: string): LaunchdSchedule {
   const parts = schedule.trim().split(/\s+/);
   if (parts.length !== 5) {
     throw new Error(`Invalid cron expression: ${schedule}`);
   }
 
-  const [minute, hour] = parts;
+  const [minuteField, hourField] = parts;
+  const minutes = expandCronField(minuteField, 0, 59);
+  const hours = expandCronField(hourField, 0, 23);
 
-  // Fixed-time pattern: "0 9 * * *"
-  if (!hour.includes("/") && !minute.includes("/")) {
-    return {
-      StartCalendarInterval: {
-        Hour: parseInt(hour),
-        Minute: parseInt(minute),
-      },
-    };
+  const intervals = hours.flatMap(h => minutes.map(m => ({ Hour: h, Minute: m })));
+  if (intervals.length === 0) {
+    throw new Error(`Cron expression "${schedule}" produced no valid intervals`);
   }
 
-  // Interval pattern: "0 */2 * * *"
-  if (hour.includes("*/")) {
-    const intervalMatch = hour.match(/^\*\/(\d+)$/);
-    if (!intervalMatch) {
-      throw new Error(`Unsupported hour pattern: ${hour}`);
-    }
-    const interval = parseInt(intervalMatch[1]);
-    const minuteValue = parseInt(minute);
-    const hours: Array<{ Hour: number; Minute: number }> = [];
-    for (let h = 0; h < 24; h += interval) {
-      hours.push({ Hour: h, Minute: minuteValue });
-    }
-    return { StartCalendarInterval: hours };
+  if (intervals.length === 1) {
+    return { StartCalendarInterval: intervals[0] };
   }
-
-  throw new Error(`Unsupported cron pattern: ${schedule}`);
+  return { StartCalendarInterval: intervals };
 }
 
 export function generateJobPlist(
@@ -168,7 +176,7 @@ export function generateJobPlist(
   repoRoot: string,
   homeDir: string
 ): string {
-  const label = `ai.muavin.job.${job.id}`;
+  const label = jobLabel(job.id);
   const schedule = cronToLaunchd(job.schedule);
   const pathEnv = `${homeDir}/.local/bin:${homeDir}/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
 
@@ -247,43 +255,40 @@ export async function syncJobPlists(): Promise<void> {
 
   const launchAgentsDir = join(homeDir, "Library/LaunchAgents");
   const allFiles = await readdir(launchAgentsDir).catch(() => []);
-  const existingJobPlists = allFiles.filter((f) => f.startsWith("ai.muavin.job."));
+  const existingJobPlists = allFiles.filter((f) => f.startsWith(JOB_LABEL_PREFIX));
 
   const enabledJobs = allJobs.filter((j) => j.enabled);
   const enabledJobIds = new Set(enabledJobs.map((j) => j.id));
 
   // Sync enabled jobs
   for (const job of enabledJobs) {
-    const plistName = `ai.muavin.job.${job.id}.plist`;
-    const plistPath = join(launchAgentsDir, plistName);
+    const plistPath = join(launchAgentsDir, jobPlistName(job.id));
     const newContent = generateJobPlist(job, bunPath, repoRoot, homeDir);
 
     const existingContent = await readFile(plistPath, "utf-8").catch(() => null);
     if (existingContent !== newContent) {
       await writeFile(plistPath, newContent);
 
-      const label = `ai.muavin.job.${job.id}`;
-      await reloadService(uid, label, plistPath);
+      await reloadService(uid, jobLabel(job.id), plistPath);
       console.log(`Synced job: ${job.id}`);
     }
   }
 
   // Remove disabled/deleted jobs
-  for (const plistName of existingJobPlists) {
-    const jobId = plistName.replace("ai.muavin.job.", "").replace(".plist", "");
-    if (!enabledJobIds.has(jobId)) {
-      const plistPath = join(launchAgentsDir, plistName);
-      const label = `ai.muavin.job.${jobId}`;
+  for (const plistFile of existingJobPlists) {
+    const id = jobIdFromPlist(plistFile);
+    if (!enabledJobIds.has(id)) {
+      const plistPath = join(launchAgentsDir, plistFile);
 
       // Bootout
-      await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${label}`], {
+      await Bun.spawn(["launchctl", "bootout", `gui/${uid}/${jobLabel(id)}`], {
         stdout: "pipe",
         stderr: "pipe",
       }).exited;
 
       // Delete plist
       await unlink(plistPath);
-      console.log(`Removed job: ${jobId}`);
+      console.log(`Removed job: ${id}`);
     }
   }
 }

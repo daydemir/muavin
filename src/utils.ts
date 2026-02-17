@@ -113,6 +113,9 @@ export function timestamp(prefix: string): string {
 export const isSkipResponse = (text: string): boolean =>
   text.trim().toUpperCase().endsWith("SKIP");
 
+export const formatError = (e: unknown): string =>
+  e instanceof Error ? e.message : String(e);
+
 export function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60_000);
@@ -169,6 +172,23 @@ export async function readOutbox(): Promise<Array<OutboxItem & { _filename: stri
 export async function clearOutboxItems(filenames: string[]): Promise<void> {
   for (const filename of filenames) {
     await unlink(join(OUTBOX_DIR, filename)).catch(() => {});
+  }
+}
+
+export async function claimOutboxItems(filenames: string[]): Promise<void> {
+  for (const filename of filenames) {
+    await rename(join(OUTBOX_DIR, filename), join(OUTBOX_DIR, `${filename}.processing`)).catch(() => {});
+  }
+}
+
+export async function restoreUndeliveredOutbox(): Promise<void> {
+  await mkdir(OUTBOX_DIR, { recursive: true });
+  const files = await readdir(OUTBOX_DIR);
+  for (const file of files) {
+    if (file.endsWith(".processing")) {
+      const original = file.slice(0, -".processing".length);
+      await rename(join(OUTBOX_DIR, file), join(OUTBOX_DIR, original)).catch(() => {});
+    }
   }
 }
 

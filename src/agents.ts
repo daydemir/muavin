@@ -1,10 +1,37 @@
 import { readFile, readdir, mkdir, unlink, stat } from "fs/promises";
 import { join } from "path";
-import { MUAVIN_DIR, loadJson, saveJson, timeAgo } from "./utils";
+import { MUAVIN_DIR, loadJson, saveJson, timeAgo, timestamp } from "./utils";
 import type { Job } from "./jobs";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
 const SUPABASE_TIMEOUT_MS = 30_000;
+const WORKER_PATH = join(import.meta.dir, "memory-worker.ts");
+const BUN_PATH = process.execPath;
+
+async function spawnWorker<T>(command: string, input: object): Promise<T> {
+  const proc = Bun.spawn([BUN_PATH, "run", WORKER_PATH, command], {
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: "pipe",
+    env: process.env,
+    cwd: MUAVIN_DIR,
+  });
+  proc.stdin.write(JSON.stringify(input));
+  proc.stdin.end();
+
+  const timeout = setTimeout(() => proc.kill(), SUPABASE_TIMEOUT_MS);
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (exitCode !== 0) throw new Error(`memory-worker ${command} failed: ${stderr}`);
+    return JSON.parse(stdout) as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 export interface AgentFile {
   id: string;
@@ -59,15 +86,29 @@ export async function getAgent(id: string): Promise<AgentFile | null> {
   }
 }
 
+const writeLocks = new Map<string, Promise<void>>();
+
 export async function updateAgent(
   id: string,
   updates: Partial<AgentFile>,
   filename?: string,
 ): Promise<void> {
-  const filePath = join(AGENTS_DIR, filename ?? `${id}.json`);
-  const current = JSON.parse(await readFile(filePath, "utf-8")) as AgentFile;
-  const { _filename, ...rest } = { ...current, ...updates };
-  await saveJson(filePath, rest);
+  const key = filename ?? `${id}.json`;
+  const prev = writeLocks.get(key) ?? Promise.resolve();
+  const current = prev.then(async () => {
+    const filePath = join(AGENTS_DIR, key);
+    const data = JSON.parse(await readFile(filePath, "utf-8")) as AgentFile;
+    const { _filename, ...rest } = { ...data, ...updates };
+    await saveJson(filePath, rest);
+  });
+  const wrapped = current.catch((e) => {
+    console.error(timestamp("agents"), `updateAgent write failed for ${key}:`, e);
+  });
+  writeLocks.set(key, wrapped);
+  wrapped.finally(() => {
+    if (writeLocks.get(key) === wrapped) writeLocks.delete(key);
+  });
+  await current;
 }
 
 export async function listAgents(filter?: {
@@ -174,40 +215,29 @@ export async function buildContext(opts: {
     } catch {}
   }
 
-  // 2 & 3. Semantic search + recent messages in parallel (15s timeout each)
-  const { searchContext, getRecentMessages } = await import("./memory");
+  // 2 & 3. Semantic search + recent messages via subprocess (avoids bun connection pool issues)
+  type SearchResult = Array<{ content: string; source: string; similarity: number }>;
+  type RecentResult = Array<{ role: string; content: string; created_at: string }>;
 
-  const searchAbort = new AbortController();
-  const recentAbort = new AbortController();
+  let searchFailed = false;
+  let recentFailed = false;
 
   const [contextResults, recent] = await Promise.all([
-    Promise.race([
-      searchContext(opts.query, 3, searchAbort.signal),
-      new Promise<[]>(resolve => setTimeout(() => {
-        console.error("buildContext: Supabase search timed out (30s)");
-        searchAbort.abort();
-        resolve([]);
-      }, SUPABASE_TIMEOUT_MS)),
-    ]).catch(() => []),
+    spawnWorker<SearchResult>("search", { query: opts.query, limit: 3 })
+      .catch(e => { searchFailed = true; console.error("buildContext: search worker failed:", e.message); return [] as SearchResult; }),
 
     (full && opts.chatId && opts.recentCount)
-      ? Promise.race([
-          getRecentMessages(String(opts.chatId), opts.recentCount, recentAbort.signal),
-          new Promise<[]>(resolve => setTimeout(() => {
-            console.error("buildContext: recent messages timed out (30s)");
-            recentAbort.abort();
-            resolve([]);
-          }, SUPABASE_TIMEOUT_MS)),
-        ]).catch(() => [])
-      : Promise.resolve([]),
+      ? spawnWorker<RecentResult>("recent", { chatId: String(opts.chatId), limit: opts.recentCount })
+          .catch(e => { recentFailed = true; console.error("buildContext: recent worker failed:", e.message); return [] as RecentResult; })
+      : Promise.resolve([] as RecentResult),
   ]);
 
-  if (searchAbort.signal.aborted || recentAbort.signal.aborted) {
+  if (searchFailed || recentFailed) {
     const missing = [
-      searchAbort.signal.aborted && "memory search",
-      recentAbort.signal.aborted && "recent messages",
+      searchFailed && "memory search",
+      recentFailed && "recent messages",
     ].filter(Boolean).join(" and ");
-    parts.push(`[System Warning] ${missing} timed out — you are responding without full context. Be helpful but note if unsure about recent context.`);
+    parts.push(`[System Warning] ${missing} failed — you are responding without full context.`);
   }
 
   if (contextResults.length > 0) {

@@ -359,9 +359,11 @@ for (var i = 0; i < cals.length; i++) {
   var cal = cals[i];
   ${calFilter}
   try {
-    var evts = cal.events.whose({_and: [{startDate: {_greaterThanEquals: startD}}, {startDate: {_lessThanEquals: endD}}]})();
+    var evts = cal.events();
     for (var j = 0; j < evts.length; j++) {
       var e = evts[j];
+      var eStart = e.startDate().getTime();
+      if (eStart < startD.getTime() || eStart > endD.getTime()) continue;
       var loc = "";
       try { loc = e.location() || ""; } catch(x) {}
       out.push(e.summary() + RS + e.startDate().toString() + RS + e.endDate().toString() + RS + loc + RS + cal.name());

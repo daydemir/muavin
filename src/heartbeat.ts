@@ -10,7 +10,7 @@ import { homedir } from "os";
 import { sendTelegram } from "./telegram";
 import { listAgents, updateAgent } from "./agents";
 import { callClaude } from "./claude";
-import { MUAVIN_DIR, loadConfig, writeOutbox, isSkipResponse, isPidAlive } from "./utils";
+import { MUAVIN_DIR, loadConfig, writeOutbox, isSkipResponse, isPidAlive, formatError } from "./utils";
 import { EMBEDDING_DIMS, EMBEDDING_MODEL } from "./constants";
 
 const STATE_PATH = join(MUAVIN_DIR, "heartbeat-state.json");
@@ -98,7 +98,7 @@ async function checkSupabase(): Promise<string | null> {
     if (error) return `Supabase error: ${error.message}`;
     return null;
   } catch (e) {
-    return `Supabase unreachable: ${e instanceof Error ? e.message : String(e)}`;
+    return `Supabase unreachable: ${formatError(e)}`;
   }
 }
 
@@ -115,7 +115,7 @@ async function checkOpenAI(): Promise<string | null> {
     if (!res.ok) throw new Error(`OpenAI API error: ${res.status}`);
     return null;
   } catch (e) {
-    return `OpenAI unreachable: ${e instanceof Error ? e.message : String(e)}`;
+    return `OpenAI unreachable: ${formatError(e)}`;
   }
 }
 
@@ -125,7 +125,7 @@ async function checkTelegram(): Promise<string | null> {
     await bot.api.getMe();
     return null;
   } catch (e) {
-    return `Telegram API error: ${e instanceof Error ? e.message : String(e)}`;
+    return `Telegram API error: ${formatError(e)}`;
   }
 }
 
@@ -134,11 +134,24 @@ async function checkErrorLogs(lastRun: number): Promise<string | null> {
     join(homedir(), "Library/Logs/muavin-relay.error.log"),
     join(homedir(), "Library/Logs/muavin-jobs.error.log"),
   ];
+
+  // Read relay start timestamp (if exists)
+  let relayStartTime = 0;
+  try {
+    const startFile = join(MUAVIN_DIR, "relay-started-at");
+    const startStr = await readFile(startFile, "utf-8");
+    relayStartTime = parseInt(startStr.trim(), 10);
+  } catch {
+    // If file doesn't exist, fall back to lastRun
+    relayStartTime = lastRun;
+  }
+
   const recentErrors: string[] = [];
   for (const logFile of logFiles) {
     try {
       const s = await stat(logFile);
-      if (s.mtimeMs > lastRun && s.size > 0) {
+      // Use relayStartTime instead of lastRun for filtering
+      if (s.mtimeMs > relayStartTime && s.size > 0) {
         const content = await readFile(logFile, "utf-8");
         const lines = content.split("\n").filter(l => l.trim());
         const last = lines.slice(-5);
@@ -167,6 +180,10 @@ async function checkStuckAgents(): Promise<string | null> {
     if (stuck.length > 0) {
       // Recover stuck agents: mark as failed
       for (const agent of stuck) {
+        // Guard against race: skip if already completed or failed
+        if (agent.status === "completed" || agent.status === "failed") {
+          continue;
+        }
         await updateAgent(agent.id, {
           status: "failed",
           completedAt: new Date().toISOString(),
@@ -252,7 +269,7 @@ async function main() {
         failures[i] = "Job plists re-synced";
         console.log("Job plists re-synced");
       } catch (e) {
-        failures[i] = `Job plist sync failed: ${e instanceof Error ? e.message : e}`;
+        failures[i] = `Job plist sync failed: ${formatError(e)}`;
       }
     }
   }

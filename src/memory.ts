@@ -5,7 +5,7 @@ import { join } from "path";
 import { callClaude } from "./claude";
 import { sendAndLog } from "./telegram";
 import { MUAVIN_DIR, loadConfig } from "./utils";
-import { EMBEDDING_DIMS, EMBEDDING_MODEL } from "./constants";
+import { EMBEDDING_DIMS, EMBEDDING_MODEL, EMBEDDING_TIMEOUT_MS } from "./constants";
 
 const SYSTEM_CWD = join(MUAVIN_DIR, "system");
 const PROMPTS_DIR = join(MUAVIN_DIR, "prompts");
@@ -43,18 +43,30 @@ function extractJSON(text: string): string {
 export const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!,
+  {
+    global: {
+      fetch: ((url: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        headers.set("Connection", "close");
+        return fetch(url, { ...init, keepalive: false, headers } as RequestInit);
+      }) as typeof fetch,
+    },
+  },
 );
 
 export async function embed(text: string): Promise<number[]> {
   // Raw fetch: OpenAI SDK v4.104.0 corrupts dimensions param on Bun
   const res = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
+    keepalive: false,
     headers: {
       "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
       "Content-Type": "application/json",
+      "Connection": "close",
     },
     body: JSON.stringify({ model: EMBEDDING_MODEL, input: text, dimensions: EMBEDDING_DIMS }),
-  });
+    signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
+  } as RequestInit);
   if (!res.ok) throw new Error(`OpenAI embeddings failed: ${res.status} ${await res.text()}`);
   const data = await res.json() as { data: Array<{ embedding: number[] }> };
   return data.data[0].embedding;
@@ -65,17 +77,14 @@ export async function logMessage(
   content: string,
   chatId: string,
 ): Promise<void> {
-  const embedding = await embed(content).catch(e => {
-    console.error("logMessage embed failed, storing without embedding:", e);
-    return null;
-  });
+  const embedding = await embed(content);
   const { error } = await supabase.from("messages").insert({
     role,
     content,
     chat_id: chatId,
     embedding,
   });
-  if (error) console.error("logMessage insert failed:", error);
+  if (error) throw new Error(`logMessage insert failed: ${error.message}`);
 }
 
 async function searchRpc(
@@ -285,6 +294,53 @@ export async function runHealthCheck(model?: string): Promise<void> {
   } catch {
     console.error("Failed to parse health check result, response:", result.text.slice(0, 200));
     return;
+  }
+
+  // Validate structure
+  const validMemoryIds = new Set(memories.map(m => m.id));
+
+  function isValidStructure(obj: any): obj is HealthCheckResult {
+    return (
+      obj &&
+      typeof obj === "object" &&
+      Array.isArray(obj.stale) &&
+      Array.isArray(obj.clarify) &&
+      Array.isArray(obj.merge) &&
+      Array.isArray(obj.resolved)
+    );
+  }
+
+  if (!isValidStructure(healthResult)) {
+    console.error("Health check result has invalid structure:", Object.keys(healthResult));
+    return;
+  }
+
+  // Filter and validate IDs
+  const originalCounts = {
+    stale: healthResult.stale.length,
+    clarify: healthResult.clarify.length,
+    merge: healthResult.merge.length,
+    resolved: healthResult.resolved.length,
+  };
+
+  healthResult.stale = healthResult.stale.filter(id => validMemoryIds.has(id));
+  healthResult.clarify = healthResult.clarify.filter(item => validMemoryIds.has(item.id));
+  healthResult.merge = healthResult.merge.filter(item => item.ids.every(id => validMemoryIds.has(id)));
+  healthResult.resolved = healthResult.resolved.filter(item =>
+    validMemoryIds.has(item.stale_id) && validMemoryIds.has(item.kept_id)
+  );
+
+  // Log filtered entries
+  const filteredCounts = {
+    stale: originalCounts.stale - healthResult.stale.length,
+    clarify: originalCounts.clarify - healthResult.clarify.length,
+    merge: originalCounts.merge - healthResult.merge.length,
+    resolved: originalCounts.resolved - healthResult.resolved.length,
+  };
+
+  const totalFiltered = Object.values(filteredCounts).reduce((a, b) => a + b, 0);
+  if (totalFiltered > 0) {
+    console.warn(`Health check: filtered ${totalFiltered} entries with invalid IDs:`, filteredCounts);
   }
 
   // Load config for owner chat ID

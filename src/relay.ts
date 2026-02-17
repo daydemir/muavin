@@ -1,13 +1,13 @@
 import { validateEnv } from "./env";
 import { Bot, type Context } from "grammy";
-import { writeFile, readFile, mkdir, unlink } from "fs/promises";
+import { writeFile, mkdir, unlink } from "fs/promises";
 import { watch } from "fs";
 import { join } from "path";
-import { callClaude, killAllChildren } from "./claude";
+import { callClaude, killAllChildren, waitForChildren, activeChildPids } from "./claude";
 import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
-import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, writeOutbox, readOutbox, clearOutboxItems, timestamp, isSkipResponse, formatLocalTime, isPidAlive } from "./utils";
+import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, claimOutboxItems, restoreUndeliveredOutbox, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
 
 validateEnv();
@@ -16,11 +16,25 @@ process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err);
 });
 
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+
 // ── Config ──────────────────────────────────────────────────
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const SESSIONS_FILE = join(MUAVIN_DIR, "sessions.json");
 const UPLOADS_DIR = join(MUAVIN_DIR, "uploads");
+
+// ── Constants ────────────────────────────────────────────────
+const TYPING_INTERVAL_MS = 4000;
+const OUTBOX_DEBOUNCE_MS = 2000;
+const AGENT_DEBOUNCE_MS = 1000;
+const CHECK_INTERVAL_MS = 30000;
+const STALE_STATUS_MS = 5 * 60 * 1000;
+const STUCK_AGENT_MS = 2 * 60 * 60 * 1000;
+const TELEGRAM_MAX_LENGTH = 4000;
+
 
 // ── Allow list from config ─────────────────────────────────
 const config = await loadConfig();
@@ -45,6 +59,9 @@ if (!(await acquireLock("relay"))) {
   process.exit(1);
 }
 
+// Write relay start timestamp for heartbeat error filtering
+await writeFile(join(MUAVIN_DIR, "relay-started-at"), Date.now().toString(), "utf-8");
+
 // ── Per-chat sessions ───────────────────────────────────────
 
 interface SessionState {
@@ -55,11 +72,7 @@ interface SessionState {
 type SessionMap = Record<string, SessionState>;
 
 async function loadSessions(): Promise<SessionMap> {
-  try {
-    return JSON.parse(await readFile(SESSIONS_FILE, "utf-8"));
-  } catch {
-    return {};
-  }
+  return await loadJson<SessionMap>(SESSIONS_FILE) ?? {};
 }
 
 async function saveSessions(map: SessionMap): Promise<void> {
@@ -75,7 +88,7 @@ const sessions = await loadSessions();
 // ── Message queue (two-array queue) ─────────────────────────
 
 const userQueue: Array<{ ctx: Context; prompt: string }> = [];
-const outboxQueue: Array<"check"> = [];
+let outboxPending = false;
 let processing = false;
 
 function scheduleQueue(): void {
@@ -96,12 +109,27 @@ async function drainQueues(): Promise<void> {
         await processUserMessage(item.ctx, item.prompt);
       }
 
-      // If no user messages, process one outbox item
-      if (outboxQueue.length > 0) {
-        outboxQueue.shift();
-        await processOutbox();
+      if (outboxPending) {
+        outboxPending = false;
+        const delivery = await prepareOutbox();
+
+        if (delivery) {
+          // Drain user messages that arrived during formatting
+          while (userQueue.length > 0) {
+            const item = userQueue.shift()!;
+            await processUserMessage(item.ctx, item.prompt);
+          }
+
+          const success = await sendAndLog(config.owner, delivery.text, { parseMode: "Markdown" });
+          if (success) {
+            await clearOutboxItems(delivery.claimedFiles);
+            console.log(timestamp("relay"), "Delivered outbox item(s) to owner");
+          } else {
+            console.error(timestamp("relay"), "Outbox delivery send failed, restoring items");
+            await restoreUndeliveredOutbox();
+          }
+        }
       } else {
-        // Both queues empty
         break;
       }
     }
@@ -113,7 +141,7 @@ async function drainQueues(): Promise<void> {
 async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
   const typingInterval = setInterval(() => {
     ctx.replyWithChatAction("typing").catch(() => {});
-  }, 4000);
+  }, TYPING_INTERVAL_MS);
 
   try {
     // Build context
@@ -156,9 +184,9 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     };
     await saveSessions(sessions);
 
-    // Log messages async (don't block reply)
-    logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
-    logMessage("assistant", result.text, chatId).catch(e => console.error('logMessage failed:', e));
+    // Log messages (block reply if persistence fails to keep telegram/supabase in sync)
+    await logMessage("user", prompt, chatId);
+    await logMessage("assistant", result.text, chatId);
 
     // Check if Claude wants to skip (internal signal, not sent to user)
     if (isSkipResponse(result.text)) {
@@ -173,21 +201,28 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     }
   } catch (error) {
     console.error("Error in processUserMessage:", error);
-    const errorMsg = `Error: ${error instanceof Error ? error.message : "Unknown error"}`;
+    const errorMsg = `Error: ${formatError(error)}`;
     const chatId = String(ctx.chat?.id ?? "");
-    logMessage("user", prompt, chatId).catch(e => console.error('logMessage failed:', e));
-    logMessage("assistant", errorMsg, chatId).catch(e => console.error('logMessage failed:', e));
+    await logMessage("user", prompt, chatId);
+    await logMessage("assistant", errorMsg, chatId);
     await ctx.reply(errorMsg);
   } finally {
     clearInterval(typingInterval);
   }
 }
 
-async function processOutbox(): Promise<void> {
+interface OutboxDelivery {
+  text: string;
+  claimedFiles: string[];
+}
+
+async function prepareOutbox(): Promise<OutboxDelivery | null> {
   try {
-    // Read outbox items
     const outboxItems = await readOutbox();
-    if (outboxItems.length === 0) return;
+    if (outboxItems.length === 0) return null;
+
+    // Claim items (rename to .processing) — originals restored on failure
+    await claimOutboxItems(outboxItems.map(i => i._filename));
 
     // Build voice context
     const appendSystemPrompt = await buildContext({
@@ -202,9 +237,8 @@ async function processOutbox(): Promise<void> {
       `${idx + 1}. [${item.source}${item.sourceId ? `:${item.sourceId}` : ""}] ${item.task ?? ""}:\n${item.result}`
     ).join("\n\n");
 
-    const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIf none are worth delivering (redundant, low-value, or already covered in recent conversation), respond with exactly "SKIP".`;
+    const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIMPORTANT:\n- Check [Recent Messages] in your context for any prior discussion of these topics\n- If an issue was already delivered or discussed within the last 20 messages, respond with SKIP\n- Do not acknowledge redundancy ("already covered this...") and then re-explain — just SKIP\n- Only deliver genuinely new information or actionable updates\n- Be aggressive about silence on known issues\n\nIf nothing is worth delivering, respond with exactly: SKIP\n\nIf delivering, be concise and focus only on what's new or actionable.`;
 
-    // Call Claude (no session)
     const result = await callClaude(prompt, {
       appendSystemPrompt,
       timeoutMs: config.relayTimeoutMs ?? 600000,
@@ -212,23 +246,16 @@ async function processOutbox(): Promise<void> {
       noSessionPersistence: true,
     });
 
-    // Check if Claude wants to skip
     if (isSkipResponse(result.text)) {
       console.log(timestamp("relay"), "Outbox delivery skipped by voice");
-      await clearOutboxItems(outboxItems.map(i => i._filename));
-      return;
+      return null;
     }
 
-    // Send to owner
-    const success = await sendAndLog(config.owner, result.text, { parseMode: "Markdown" });
-    if (success) {
-      console.log(timestamp("relay"), `Delivered ${outboxItems.length} outbox item(s) to owner`);
-      await clearOutboxItems(outboxItems.map(i => i._filename));
-    } else {
-      console.error(timestamp("relay"), `Outbox delivery failed, ${outboxItems.length} item(s) will retry`);
-    }
+    return { text: result.text, claimedFiles: outboxItems.map(i => `${i._filename}.processing`) };
   } catch (error) {
-    console.error(timestamp("relay"), "Error in processOutbox:", error);
+    console.error(timestamp("relay"), "Error in prepareOutbox:", error);
+    await restoreUndeliveredOutbox();
+    return null;
   }
 }
 
@@ -254,6 +281,17 @@ async function checkPendingAgents(): Promise<void> {
   } catch (error) {
     console.error(timestamp("relay"), "checkPendingAgents error:", error);
   }
+}
+
+function agentOutboxItem(agent: AgentFile, result: string): Parameters<typeof writeOutbox>[0] {
+  return {
+    source: "agent",
+    sourceId: agent.id,
+    task: agent.task,
+    result,
+    chatId: agent.chatId,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 async function runAgent(agent: AgentFile): Promise<void> {
@@ -298,22 +336,11 @@ async function runAgent(agent: AgentFile): Promise<void> {
     const elapsed = Math.round((Date.now() - startTime) / 1000);
     console.log(timestamp("relay"), `Agent ${agent.id} completed in ${elapsed}s`);
 
-    // Write to outbox
-    await writeOutbox({
-      source: "agent",
-      sourceId: agent.id,
-      task: agent.task,
-      result: result.text,
-      chatId: agent.chatId,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Push to outbox queue for voice processing
-    outboxQueue.push("check");
-    scheduleQueue();
+    // Write to outbox (watcher triggers delivery)
+    await writeOutbox(agentOutboxItem(agent, result.text));
   } catch (error) {
     // Mark as failed
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = formatError(error);
     await updateAgent(agent.id, {
       status: "failed",
       completedAt: new Date().toISOString(),
@@ -322,19 +349,8 @@ async function runAgent(agent: AgentFile): Promise<void> {
 
     console.error(timestamp("relay"), `Agent ${agent.id} failed:`, errorMsg);
 
-    // Write error to outbox
-    await writeOutbox({
-      source: "agent",
-      sourceId: agent.id,
-      task: agent.task,
-      result: `Agent failed: ${errorMsg}`,
-      chatId: agent.chatId,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Push to outbox queue
-    outboxQueue.push("check");
-    scheduleQueue();
+    // Write error to outbox (watcher triggers delivery)
+    await writeOutbox(agentOutboxItem(agent, `Agent failed: ${errorMsg}`));
   } finally {
     runningAgentCount--;
   }
@@ -350,18 +366,11 @@ async function checkRunningAgents(): Promise<void> {
       const startedAt = agent.startedAt ? new Date(agent.startedAt).getTime() : 0;
 
       // Check for stale status (>5min since last update)
-      if (lastStatusAt > 0 && now - lastStatusAt > 5 * 60 * 1000) {
+      if (lastStatusAt > 0 && now - lastStatusAt > STALE_STATUS_MS) {
         const elapsed = Math.round((now - startedAt) / 1000 / 60);
         console.log(timestamp("relay"), `Agent ${agent.id} running for ${elapsed}m (stale status)`);
 
-        await writeOutbox({
-          source: "agent",
-          sourceId: agent.id,
-          task: agent.task,
-          result: `Agent "${agent.task}" still running (${elapsed}m elapsed)`,
-          chatId: agent.chatId,
-          createdAt: new Date().toISOString(),
-        });
+        await writeOutbox(agentOutboxItem(agent, `Agent "${agent.task}" still running (${elapsed}m elapsed)`));
 
         // Update lastStatusAt
         await updateAgent(agent.id, {
@@ -370,7 +379,7 @@ async function checkRunningAgents(): Promise<void> {
       }
 
       // Check for stuck agents (>2h with dead PID)
-      if (startedAt > 0 && now - startedAt > 2 * 60 * 60 * 1000) {
+      if (startedAt > 0 && now - startedAt > STUCK_AGENT_MS) {
         const pidAlive = agent.pid ? isPidAlive(agent.pid) : false;
 
         if (!pidAlive) {
@@ -382,14 +391,7 @@ async function checkRunningAgents(): Promise<void> {
             error: "Agent stuck (>2h with dead PID)",
           }, agent._filename);
 
-          await writeOutbox({
-            source: "agent",
-            sourceId: agent.id,
-            task: agent.task,
-            result: `Agent "${agent.task}" stuck and marked as failed`,
-            chatId: agent.chatId,
-            createdAt: new Date().toISOString(),
-          });
+          await writeOutbox(agentOutboxItem(agent, `Agent "${agent.task}" stuck and marked as failed`));
         }
       }
     }
@@ -406,9 +408,9 @@ const OUTBOX_DIR = join(MUAVIN_DIR, "outbox");
 const outboxWatcher = watch(OUTBOX_DIR, () => {
   if (outboxDebounceTimer) clearTimeout(outboxDebounceTimer);
   outboxDebounceTimer = setTimeout(() => {
-    outboxQueue.push("check");
+    outboxPending = true;
     scheduleQueue();
-  }, 2000);
+  }, OUTBOX_DEBOUNCE_MS);
 });
 
 // ── Agent directory watcher ─────────────────────────────────
@@ -420,7 +422,7 @@ const agentWatcher = watch(AGENTS_DIR, () => {
   if (agentDebounceTimer) clearTimeout(agentDebounceTimer);
   agentDebounceTimer = setTimeout(() => {
     checkPendingAgents().catch(e => console.error("checkPendingAgents error:", e));
-  }, 1000);
+  }, AGENT_DEBOUNCE_MS);
 });
 
 // ── Agent check interval ────────────────────────────────────
@@ -428,12 +430,12 @@ const agentWatcher = watch(AGENTS_DIR, () => {
 const agentCheckInterval = setInterval(() => {
   checkPendingAgents().catch(e => console.error("checkPendingAgents error:", e));
   checkRunningAgents().catch(e => console.error("checkRunningAgents error:", e));
-}, 30000);
+}, CHECK_INTERVAL_MS);
 
 const outboxCheckInterval = setInterval(() => {
-  outboxQueue.push("check");
+  outboxPending = true;
   scheduleQueue();
-}, 30000);
+}, CHECK_INTERVAL_MS);
 
 // Check pending agents once at startup
 checkPendingAgents().catch(e => console.error("checkPendingAgents error:", e));
@@ -522,6 +524,7 @@ bot.on("message:photo", async (ctx) => {
     const filePath = join(UPLOADS_DIR, `photo_${Date.now()}.jpg`);
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
+      { keepalive: false, signal: AbortSignal.timeout(30_000) } as RequestInit,
     );
     if (!res.ok) throw new Error(`Photo download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
@@ -530,9 +533,9 @@ bot.on("message:photo", async (ctx) => {
     await handleMessage(ctx, `[User sent a file: ${filePath}] ${caption}`);
   } catch (error) {
     console.error("Photo error:", error);
-    await ctx.reply("Could not process photo.");
     const chatId = String(ctx.chat?.id ?? "");
-    logMessage("assistant", "Could not process photo.", chatId).catch(e => console.error('logMessage failed:', e));
+    await logMessage("assistant", "Could not process photo.", chatId);
+    await ctx.reply("Could not process photo.");
   }
 });
 
@@ -547,6 +550,7 @@ bot.on("message:document", async (ctx) => {
 
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
+      { keepalive: false, signal: AbortSignal.timeout(30_000) } as RequestInit,
     );
     if (!res.ok) throw new Error(`Document download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
@@ -555,9 +559,9 @@ bot.on("message:document", async (ctx) => {
     await handleMessage(ctx, `[User sent a file: ${filePath}] ${caption}`);
   } catch (error) {
     console.error("Document error:", error);
-    await ctx.reply("Could not process document.");
     const chatId = String(ctx.chat?.id ?? "");
-    logMessage("assistant", "Could not process document.", chatId).catch(e => console.error('logMessage failed:', e));
+    await logMessage("assistant", "Could not process document.", chatId);
+    await ctx.reply("Could not process document.");
   }
 });
 
@@ -571,42 +575,48 @@ bot.on("message:voice", async (ctx) => {
 
 // ── Response chunking ───────────────────────────────────────
 
-async function sendChunk(ctx: Context, text: string): Promise<void> {
-  // text is already markdown-formatted from sendResponse
+async function sendChunk(ctx: Context, formatted: string, plain: string): Promise<void> {
   try {
-    await ctx.reply(text, { parse_mode: "Markdown" });
+    await ctx.reply(formatted, { parse_mode: "Markdown" });
   } catch (e: any) {
     if (e?.description?.includes("can't parse") || e?.error_code === 400) {
       console.log("Markdown parse failed, retrying without parse_mode");
-      await ctx.reply(text);
+      await ctx.reply(plain);
     } else {
       throw e;
     }
   }
 }
 
+function chunkText(text: string, maxLen: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) { chunks.push(remaining); break; }
+    let idx = remaining.lastIndexOf("\n\n", maxLen);
+    if (idx <= 0) idx = remaining.lastIndexOf("\n", maxLen);
+    if (idx <= 0) idx = remaining.lastIndexOf(" ", maxLen);
+    if (idx <= 0) idx = maxLen;
+    chunks.push(remaining.slice(0, idx));
+    remaining = remaining.slice(idx).trim();
+  }
+  return chunks;
+}
+
 async function sendResponse(ctx: Context, response: string): Promise<void> {
-  // Apply markdown conversion before chunking to avoid splitting mid-escape or mid-code-block
   const formatted = toTelegramMarkdown(response);
-  const MAX = 4000;
+  const MAX = TELEGRAM_MAX_LENGTH;
+
   if (formatted.length <= MAX) {
-    await sendChunk(ctx, formatted);
+    await sendChunk(ctx, formatted, response);
     return;
   }
 
-  let remaining = formatted;
-  while (remaining.length > 0) {
-    if (remaining.length <= MAX) {
-      await sendChunk(ctx, remaining);
-      break;
-    }
-    let idx = remaining.lastIndexOf("\n\n", MAX);
-    if (idx <= 0) idx = remaining.lastIndexOf("\n", MAX);
-    if (idx <= 0) idx = remaining.lastIndexOf(" ", MAX);
-    if (idx <= 0) idx = MAX;
+  const formattedChunks = chunkText(formatted, MAX);
+  const plainChunks = chunkText(response, MAX);
 
-    await sendChunk(ctx, remaining.slice(0, idx));
-    remaining = remaining.slice(idx).trim();
+  for (let i = 0; i < formattedChunks.length; i++) {
+    await sendChunk(ctx, formattedChunks[i], plainChunks[i] ?? formattedChunks[i]);
   }
 }
 
@@ -614,11 +624,11 @@ async function sendResponse(ctx: Context, response: string): Promise<void> {
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
-    console.log(`Received ${sig}, shutting down...`);
+    console.log(`Received ${sig}, shutting down gracefully...`);
     setTimeout(() => {
       console.error("Shutdown timed out, forcing exit");
       process.exit(1);
-    }, 8000).unref();
+    }, 65000).unref();
 
     // Stop intervals and watchers
     clearInterval(agentCheckInterval);
@@ -627,7 +637,19 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     agentWatcher.close();
 
     await bot.stop();
-    await killAllChildren();
+
+    // Wait up to 60s for children to complete naturally
+    if (activeChildPids.size > 0) {
+      console.log(`Waiting for ${activeChildPids.size} child processes to complete...`);
+      const completed = await waitForChildren(60000);
+      if (completed) {
+        console.log("All children completed gracefully");
+      } else {
+        console.log(`Force-killing ${activeChildPids.size} remaining children`);
+        await killAllChildren();
+      }
+    }
+
     await releaseLock("relay");
     process.exit(0);
   });
@@ -642,6 +664,9 @@ watch(join(MUAVIN_DIR, "jobs.json"), () => {
 });
 
 // ── Start ───────────────────────────────────────────────────
+
+// Restore any outbox items left in .processing state from a previous crash
+await restoreUndeliveredOutbox();
 
 console.log("Starting Muavin relay...");
 

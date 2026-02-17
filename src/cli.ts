@@ -54,7 +54,7 @@ async function main() {
       console.log("Usage: bun muavin <command>\n");
       console.log("Commands:");
       console.log("  setup   - Interactive setup wizard");
-      console.log("  config  - Edit configuration");
+      console.log("  config  - Edit configuration (use --reset to restore defaults)");
       console.log("  start   - Deploy launch daemons");
       console.log("  stop    - Stop all daemons");
       console.log("  status  - Check daemon and session status");
@@ -958,6 +958,12 @@ async function configCommand() {
   const envPath = `${muavinDir}/.env`;
   const configPath = `${muavinDir}/config.json`;
 
+  // Check for --reset flag
+  if (Bun.argv[3] === "--reset") {
+    await resetConfig(configPath);
+    return;
+  }
+
   const env = await parseEnvFile(envPath);
   const config = await parseConfigFile(configPath) ?? {};
 
@@ -989,6 +995,42 @@ async function configCommand() {
       restoreTerminal();
       return;
     }
+  }
+}
+
+async function resetConfig(configPath: string) {
+  // Read current config to preserve owner/allowUsers
+  const currentConfig = await parseConfigFile(configPath);
+  const owner = currentConfig?.owner;
+  const allowUsers = currentConfig?.allowUsers;
+
+  // Prompt for confirmation
+  console.log(pc.yellow("⚠ This will reset all config settings to defaults."));
+  console.log(pc.yellow("  Your owner and allowUsers will be preserved.\n"));
+  const confirm = prompt('Type "yes" to proceed: ');
+  if (confirm?.toLowerCase() !== "yes") {
+    console.log("Reset cancelled.");
+    return;
+  }
+
+  // Load defaults from config.example.json
+  const examplePath = `${import.meta.dir}/../config.example.json`;
+  const defaults = JSON.parse(await Bun.file(examplePath).text());
+
+  // Preserve owner/allowUsers if they exist
+  if (owner !== undefined) defaults.owner = owner;
+  if (allowUsers !== undefined) defaults.allowUsers = allowUsers;
+
+  // Write updated config
+  await Bun.write(configPath, JSON.stringify(defaults, null, 2) + "\n");
+  ok("Configuration reset to defaults");
+
+  // Show what was preserved
+  if (owner !== undefined) {
+    console.log(pc.dim(`  Preserved owner: ${owner}`));
+  }
+  if (allowUsers !== undefined && allowUsers.length > 0) {
+    console.log(pc.dim(`  Preserved allowUsers: ${allowUsers.join(", ")}`));
   }
 }
 
