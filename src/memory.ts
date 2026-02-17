@@ -185,6 +185,7 @@ export async function extractMemories(model?: string): Promise<number> {
 
       if (!result.structuredOutput) {
         console.error("extractMemories: no structuredOutput for chat", chatId, "— skipping (may be unsupported CLI version)");
+        console.error("extractMemories: full result text:", result.text);
         continue;
       }
 
