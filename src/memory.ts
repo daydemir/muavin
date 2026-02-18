@@ -174,7 +174,7 @@ export async function extractMemories(model?: string): Promise<number> {
       const result = await callClaude(prompt, {
         noSessionPersistence: true,
         cwd: SYSTEM_CWD,
-        maxTurns: 1,
+        maxTurns: 3,
         timeoutMs: 300000,
         model,
         jsonSchema: MEMORY_SCHEMA,

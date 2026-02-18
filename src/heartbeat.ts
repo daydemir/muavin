@@ -26,7 +26,11 @@ interface HeartbeatState {
 async function loadState(): Promise<HeartbeatState> {
   try {
     const raw = JSON.parse(await readFile(STATE_PATH, "utf-8"));
-    return { lastRun: 0, lastAlertText: "", lastAlertAt: 0, lastFailuresHash: "", consecutiveFailures: {}, ...raw };
+    const state = { lastRun: 0, lastAlertText: "", lastAlertAt: 0, lastFailuresHash: "", consecutiveFailures: {}, ...raw };
+    if (typeof state.consecutiveFailures !== "object" || Array.isArray(state.consecutiveFailures) || state.consecutiveFailures === null) {
+      state.consecutiveFailures = {};
+    }
+    return state;
   } catch {
     return { lastRun: 0, lastAlertText: "", lastAlertAt: 0, lastFailuresHash: "", consecutiveFailures: {} };
   }
