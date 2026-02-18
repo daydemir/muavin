@@ -183,13 +183,18 @@ export async function extractMemories(model?: string): Promise<number> {
       // Mark as processed immediately (even if parsing fails)
       processedIds.push(...msgs.map(m => m.id));
 
-      if (!result.structuredOutput) {
-        console.error("extractMemories: no structuredOutput for chat", chatId, "— skipping (may be unsupported CLI version)");
-        console.error("extractMemories: full result text:", result.text);
-        continue;
+      let parsed: { memories: Array<{ type: string; content: string }> };
+      if (result.structuredOutput) {
+        parsed = result.structuredOutput as { memories: Array<{ type: string; content: string }> };
+      } else {
+        try {
+          parsed = JSON.parse(extractJSON(result.text));
+        } catch {
+          console.error("extractMemories: failed to parse text response for chat", chatId, "— text:", result.text.slice(0, 200));
+          continue;
+        }
       }
 
-      const parsed = result.structuredOutput as { memories: Array<{ type: string; content: string }> };
       const facts = parsed.memories;
 
       if (!Array.isArray(facts)) continue;
