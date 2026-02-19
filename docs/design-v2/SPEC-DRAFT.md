@@ -76,8 +76,16 @@ From memory, muavin produces:
 
 ### Muavin's own thoughts
 - Must be clearly separated from Deniz's written content
-- TBD: companion files? Margin annotations? Separate "muavin notes" section?
+- Leading idea: `life/.muavin/` folder — muavin's layer lives inside the same tree, namespaced, cross-links via relative paths
+- Alternative: muavin's analysis lives only in Supabase/dashboard
 - Key constraint: never modify human-written text
+- Some files may be "shared access" — collaborative artifacts both can edit
+
+### Writing support (active mode)
+- Deniz writes freely, then invokes muavin on a specific note/topic
+- Chat-based interaction: "find references for this claim", "what are counter-arguments?"
+- Muavin reads the current context, searches knowledge base + does research
+- First use case: thesis/startup thinking (unifying thesis-sdm, life/logseq, mix-assistant)
 
 ## Topics Still To Discuss
 
