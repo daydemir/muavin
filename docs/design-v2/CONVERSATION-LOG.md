@@ -41,6 +41,43 @@
 - Wants a "solid DB of my whole life" — all inputs stored durably
 - Start simple (like project_echo — just reminders or md notes) and add components incrementally
 
+### Muavin's Annotation Model
+
+**How muavin adds thoughts without touching human files:**
+- Ruled out: inline edits, appending sections to human files
+- Considered: companion files (`note.muavin.md`), separate vault with cross-links, separate DB-only space
+- Leading idea: **`life/.muavin/` pattern** — one folder tree for everything (`life/`), muavin's thoughts and actions live in `life/.muavin/` and reference files in `life/` via relative paths. No vault boundary problems, cross-linking is just paths within the same tree.
+- Also valid: muavin's analysis lives only in Supabase/dashboard, never on disk at all
+- TBD: flesh out further
+
+### Writing Support & Thesis Use Case (First Target)
+
+**Where thesis/research content lives today:**
+- `thesis-sdm` repo — the written thesis, outlines
+- `daydemir/life` repo (Logseq) — years of exploratory notes on everything
+- `mix-assistant` repo — thesis thinking in context of MIX startup
+- These three need to be unified. Muavin could obviate all of them. The new system might even become the note-taking system itself.
+
+**What "thinking with writing" looks like for Deniz:**
+- Block-based notes with linking between concepts
+- Stepping away, doing handwriting to figure out structures
+- Jumping in to do research
+- Non-linear, iterative process
+
+**What muavin should do (active mode):**
+- Deniz writes and ideates freely
+- Then invokes muavin on a specific note: "find academic references that support or oppose this claim"
+- Muavin looks around the knowledge base, does research, offers thoughts
+- Chat-based interaction is fine — doesn't need to be inline
+- Key: muavin can quickly see what Deniz is working on and offer relevant input
+
+**Shared access files:**
+- Some files should be read/write for both Deniz and muavin (not just Deniz-writes / muavin-reads)
+- This is a nuance on the "AI never edits human text" principle — some files are collaborative artifacts
+- Needs more thought on how to distinguish "my text" from "shared workspace" files
+
+**Decision: don't over-engineer this now.** The core need is clear — muavin as a research/thinking partner you can invoke on your current writing context. Implementation details (inline vs chat, file watching vs on-demand) can be simple first.
+
 ### Topics remaining:
 1. CRM & Contacts
 2. Reminders → CRM Pipeline
