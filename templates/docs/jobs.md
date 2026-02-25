@@ -22,7 +22,8 @@ Jobs have a `type` field:
 ## System Jobs
 
 Built-in system jobs in the block-based alpha:
-- `files-ingest` — scans `filesInboxDir`, uploads to R2, extracts text/transcripts, creates artifacts + MUA insight blocks
+- `state-processor` — every 5 minutes, processes pending user blocks/artifacts via Claude, updates MUA blocks/entities/links
+- `files-ingest` — scans `filesInboxDir`, uploads to R2, extracts text/transcripts, and queues artifacts for processor analysis
 - `agent-cleanup` — removes old completed/failed agent files and old upload temp files
 - `clarification-digest` — sends pending clarification questions for low-confidence entity resolution
 

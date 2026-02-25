@@ -24,6 +24,14 @@ export interface Job {
 
 export const DEFAULT_JOBS: Job[] = [
   {
+    id: "state-processor",
+    name: "State processor",
+    schedule: "*/5 * * * *",
+    action: "process-state",
+    type: "system",
+    enabled: true,
+  },
+  {
     id: "files-ingest",
     name: "Files inbox ingest",
     schedule: "0 * * * *",

@@ -64,6 +64,9 @@ async function main() {
     case "clarify":
       await (await import("./blocks-cli")).clarifyCommand(Bun.argv.slice(3));
       break;
+    case "process":
+      await (await import("./blocks-cli")).processCommand(Bun.argv.slice(3));
+      break;
     default:
       heading("Muavin CLI\n");
       console.log("Usage: bun muavin <command>\n");
@@ -80,6 +83,7 @@ async function main() {
       console.log("  inbox   - Inspect ingested artifacts");
       console.log("  ingest  - Run inbox ingestion");
       console.log("  clarify - Run/answer clarification queue");
+      console.log("  process - Run state processor manually");
       process.exit(0);
   }
 }

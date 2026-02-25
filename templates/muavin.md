@@ -58,6 +58,7 @@ Prefer asking precise, short disambiguation questions.
 ## Jobs
 
 System jobs:
+- `state-processor` (every 5 minutes, processes pending blocks/artifacts into MUA blocks/entities)
 - `files-ingest`
 - `agent-cleanup`
 - `clarification-digest`

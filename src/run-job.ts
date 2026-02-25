@@ -1,10 +1,10 @@
 import { validateEnv } from "./env";
 import { join } from "path";
 import { callClaude } from "./claude";
-import { runHealthCheck, extractMemories } from "./memory";
 import { cleanupAgents, buildContext, cleanupUploads } from "./agents";
 import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime, formatError, acquireLock, releaseLock, type Config } from "./utils";
 import type { Job } from "./jobs";
+import { buildClarificationDigest, ingestFilesInbox, processPendingState } from "./blocks";
 
 validateEnv();
 
@@ -47,19 +47,71 @@ console.log(`[${jobId}] running...`);
 type ActionHandler = (job: Job, config: Config) => Promise<void>;
 
 const actions: Record<string, ActionHandler> = {
-  "memory-health": async (job) => {
-    await runHealthCheck(job.model);
-    console.log(`[${job.id}] health check complete`);
-  },
-  "extract-memories": async (job) => {
-    const extracted = await extractMemories(job.model);
-    console.log(`[${job.id}] extracted ${extracted} memories`);
-  },
   "cleanup-agents": async (job, config) => {
     const retentionDays = config.cleanupRetentionDays ?? 7;
     const cleanedAgents = await cleanupAgents(retentionDays * 24 * 60 * 60_000);
     const cleanedUploads = await cleanupUploads(24 * 60 * 60_000);
     console.log(`[${job.id}] cleaned ${cleanedAgents} old agent files, ${cleanedUploads} old uploads`);
+  },
+  "ingest-files": async (job, config) => {
+    const result = await ingestFilesInbox();
+    console.log(`[${job.id}] scanned=${result.scanned} ingested=${result.ingested} skipped=${result.skipped} errored=${result.errored}`);
+
+    if (result.ingested > 0 || result.errored > 0) {
+      await writeOutbox({
+        source: "job",
+        sourceId: job.id,
+        task: job.name || job.id,
+        result: `files ingest: scanned=${result.scanned}, ingested=${result.ingested}, skipped=${result.skipped}, errored=${result.errored}`,
+        chatId: config.owner,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  },
+  "clarification-digest": async (job, config) => {
+    const digest = await buildClarificationDigest(30);
+    if (!digest) {
+      console.log(`[${job.id}] SKIP`);
+      return;
+    }
+    await writeOutbox({
+      source: "job",
+      sourceId: job.id,
+      task: job.name || job.id,
+      result: digest,
+      chatId: config.owner,
+      createdAt: new Date().toISOString(),
+    });
+    console.log(`[${job.id}] wrote clarification digest to outbox`);
+  },
+  "process-state": async (job, config) => {
+    const userLimit = Number(config.blockProcessorUserLimit ?? 20);
+    const artifactLimit = Number(config.blockProcessorArtifactLimit ?? 10);
+    const result = await processPendingState({
+      userLimit: Number.isFinite(userLimit) && userLimit > 0 ? userLimit : 20,
+      artifactLimit: Number.isFinite(artifactLimit) && artifactLimit > 0 ? artifactLimit : 10,
+    });
+    console.log(
+      `[${job.id}] users scanned=${result.userScanned} processed=${result.userProcessed} errored=${result.userErrored}; artifacts scanned=${result.artifactsScanned} processed=${result.artifactsProcessed} errored=${result.artifactsErrored}`,
+    );
+
+    const hasActivity = result.userProcessed > 0
+      || result.userErrored > 0
+      || result.artifactsProcessed > 0
+      || result.artifactsErrored > 0;
+    if (!hasActivity) {
+      console.log(`[${job.id}] SKIP`);
+      return;
+    }
+
+    await writeOutbox({
+      source: "job",
+      sourceId: job.id,
+      task: job.name || job.id,
+      result: `state processing: user processed=${result.userProcessed}/${result.userScanned}, user errors=${result.userErrored}; artifacts processed=${result.artifactsProcessed}/${result.artifactsScanned}, artifact errors=${result.artifactsErrored}`,
+      chatId: config.owner,
+      createdAt: new Date().toISOString(),
+    });
   },
 };
 
