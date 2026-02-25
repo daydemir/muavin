@@ -717,19 +717,9 @@ async function installTemplates() {
   await mkdir(outboxDir, { recursive: true });
   await mkdir(inboxFilesDir, { recursive: true });
 
-  // Install CLAUDE.md (only if not exists — don't overwrite personality)
-  const claudePath = `${muavinDir}/CLAUDE.md`;
-  if (!(await Bun.file(claudePath).exists())) {
-    try {
-      const content = await Bun.file(`${templatesDir}/CLAUDE.md`).text();
-      await Bun.write(claudePath, content);
-      ok("Created CLAUDE.md");
-    } catch {
-      fail("Could not read templates/CLAUDE.md");
-    }
-  } else {
-    ok("CLAUDE.md already exists");
-  }
+  // Remove legacy top-level CLAUDE.md; style instructions live in muavin.md
+  const { unlink: unlinkFile } = await import("fs/promises");
+  await unlinkFile(`${muavinDir}/CLAUDE.md`).catch(() => {});
 
   // Install muavin.md (always overwrite — identity file)
   try {
@@ -765,13 +755,13 @@ async function installTemplates() {
   ok(`Installed prompts/ (${promptFiles.length} files)`);
 
   // Remove stale prompt files that are not part of the active prompt set
-  const { readdir: readDir, unlink: unlinkFile } = await import("fs/promises");
+  const { readdir: readDir, unlink: unlinkPromptFile } = await import("fs/promises");
   const allowedPromptFiles = new Set(promptFiles);
   const existingPromptFiles = await readDir(promptsDir).catch(() => []);
   for (const existingFile of existingPromptFiles) {
     if (existingFile.startsWith(".")) continue;
     if (!allowedPromptFiles.has(existingFile)) {
-      await unlinkFile(`${promptsDir}/${existingFile}`).catch(() => {});
+      await unlinkPromptFile(`${promptsDir}/${existingFile}`).catch(() => {});
     }
   }
 
