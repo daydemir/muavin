@@ -67,6 +67,9 @@ async function main() {
     case "process":
       await (await import("./blocks-cli")).processCommand(Bun.argv.slice(3));
       break;
+    case "live":
+      await liveConversationCommand();
+      break;
     default:
       heading("Muavin CLI\n");
       console.log("Usage: bun muavin <command>\n");
@@ -84,7 +87,37 @@ async function main() {
       console.log("  ingest  - Run inbox ingestion");
       console.log("  clarify - Run/answer clarification queue");
       console.log("  process - Run state processor manually");
+      console.log("  live    - Open a live Claude conversation with Muavin prompt");
       process.exit(0);
+  }
+}
+
+async function liveConversationCommand() {
+  heading("Starting live Muavin conversation...\n");
+  const muavinDir = `${process.env.HOME}/.muavin`;
+  const muavinPromptPath = `${muavinDir}/muavin.md`;
+  const args = ["claude"];
+
+  const promptFile = Bun.file(muavinPromptPath);
+  if (await promptFile.exists()) {
+    const promptContent = (await promptFile.text()).trim();
+    if (promptContent) {
+      args.push("--append-system-prompt", promptContent);
+    }
+  } else {
+    warn(`muavin prompt not found at ${muavinPromptPath}; starting plain claude session`);
+  }
+
+  const proc = Bun.spawn(args, {
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+    cwd: muavinDir,
+  });
+  await proc.exited;
+
+  if (proc.exitCode !== 0) {
+    fail(`claude exited with code ${proc.exitCode}`);
   }
 }
 
