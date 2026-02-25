@@ -24,18 +24,10 @@ export interface Job {
 
 export const DEFAULT_JOBS: Job[] = [
   {
-    id: "memory-health",
-    name: "Memory health check",
-    schedule: "0 9 * * *",
-    action: "memory-health",
-    type: "system",
-    enabled: true,
-  },
-  {
-    id: "memory-extraction",
-    name: "Extract memories",
-    schedule: "0 */2 * * *",
-    action: "extract-memories",
+    id: "files-ingest",
+    name: "Files inbox ingest",
+    schedule: "0 * * * *",
+    action: "ingest-files",
     type: "system",
     enabled: true,
   },
@@ -48,73 +40,32 @@ export const DEFAULT_JOBS: Job[] = [
     enabled: true,
   },
   {
-    id: "self-improvement",
-    name: "Self-improvement review",
-    schedule: "0 4 * * *",
-    type: "default",
-    model: "opus",
+    id: "clarification-digest",
+    name: "Clarification digest",
+    schedule: "0 21 * * *",
+    action: "clarification-digest",
+    type: "system",
     enabled: true,
-    prompt: `Review your own performance and make improvements. Check:
-
-1. Recent conversation messages (last 7 days) for patterns of user corrections, confusion, or frustration. Pay special attention to emotional signals — frustrated corrections, repeated corrections on the same issue, expressions of impatience or confusion. These are highest-priority signals. Check whether past frustration points have been addressed or keep recurring.
-2. Agent delivery logs — any failed or skipped deliveries
-3. Job execution logs (~/Library/Logs/muavin-jobs.log) — any failures or bad output
-4. Memory store — stale, contradictory, or wrong facts
-5. Your prompt templates (~/.muavin/prompts/), docs (~/.muavin/docs/), and identity (~/.muavin/muavin.md) for inaccuracies
-
-For low-risk/obvious fixes (typos, stale facts, clearly wrong info): make the change directly and include what you changed and why in your response.
-For risky/significant changes: describe the proposed change and why, but do NOT make it — wait for user approval.
-
-Focus on concrete, specific improvements. Do not make changes for the sake of change.
-
-If nothing needs improvement, respond with exactly: SKIP`,
-  },
-  {
-    id: "autonomous-suggestions",
-    name: "Autonomous action suggestions",
-    schedule: "0 10 * * *",
-    type: "default",
-    model: "opus",
-    enabled: true,
-    prompt: `Based on what you know about me and my goals, what are tasks you can do to get us closer to our missions? Review recent conversations, memories, active projects, and context — suggest 1-2 actions you can take autonomously (without user involvement) that would genuinely help.
-
-Think ambitiously. You have full command-line access, web search, file system, APIs, and can create agents for long-running tasks. Examples: research a topic they mentioned, set up a monitoring script, organize files, write a comparison doc, automate a repetitive workflow.
-
-Review the message history for your past autonomous suggestions and how the user responded. The semantic memory context may also surface older patterns. Note which types of suggestions were welcomed vs ignored — adapt accordingly. Don't over-index on individual non-responses (the user may have been busy or distracted), but notice trends across multiple deliveries.
-
-Rules:
-- Only suggest things you can actually do end-to-end without user input
-- Be specific — "I could research X and write up findings" not "I could help with research"
-- Prefer high-impact actions over busywork
-- 1-2 suggestions max. Quality over quantity.
-
-If nothing useful comes to mind, respond with exactly: SKIP`,
-  },
-  {
-    id: "user-suggestions",
-    name: "High-ROI user suggestions",
-    schedule: "0 11 * * *",
-    type: "default",
-    model: "opus",
-    enabled: true,
-    prompt: `Review what you know about the user — conversations, memories, goals, deadlines, and context. Suggest actions the user could take that are high-ROI and time-sensitive.
-
-Be extremely selective. The user is busy. Only surface things that are:
-- Truly worth their attention right now
-- High impact relative to effort
-- Time-sensitive or have a deadline approaching
-- Things you can partially help with or automate
-
-A day with no suggestion is better than a low-value one. If you suggest something, also mention how you can help (e.g., "I can draft the email if you want" or "I can research options while you decide").
-
-Review the message history for your past user suggestions and whether they were acted on or dismissed. The semantic memory context may also reveal older patterns. Adapt based on trends — if certain types were consistently ignored, try different angles. Don't read too much into individual non-responses (busy, distracted, changed priorities), but do learn from repeated patterns.
-
-Max 1 suggestion. If nothing meets the bar, respond with exactly: SKIP`,
   },
 ];
 
 export function seedDefaultJobs(existing: Job[]): Job[] {
-  const result = existing.map((j) => ({ ...j }));
+  const removedIds = new Set([
+    "memory-health",
+    "memory-extraction",
+    "self-improvement",
+    "autonomous-suggestions",
+    "user-suggestions",
+    "ai-tools-digest",
+    "stretch-reminder",
+    "urgent-reminders",
+    "auto-safe",
+    "morning-briefing",
+    "product-self-improvement",
+  ]);
+  const result = existing
+    .filter((j) => !removedIds.has(j.id))
+    .map((j) => ({ ...j }));
   let added = 0;
 
   for (const defaultJob of DEFAULT_JOBS) {

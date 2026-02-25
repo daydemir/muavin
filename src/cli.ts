@@ -49,6 +49,21 @@ async function main() {
     case "agent":
       await agentCommand();
       break;
+    case "write":
+      await (await import("./blocks-cli")).writeCommand();
+      break;
+    case "crm":
+      await (await import("./blocks-cli")).crmCommand(Bun.argv.slice(3));
+      break;
+    case "inbox":
+      await (await import("./blocks-cli")).inboxCommand(Bun.argv.slice(3));
+      break;
+    case "ingest":
+      await (await import("./blocks-cli")).ingestCommand(Bun.argv.slice(3));
+      break;
+    case "clarify":
+      await (await import("./blocks-cli")).clarifyCommand(Bun.argv.slice(3));
+      break;
     default:
       heading("Muavin CLI\n");
       console.log("Usage: bun muavin <command>\n");
@@ -60,6 +75,11 @@ async function main() {
       console.log("  status  - Check daemon and session status");
       console.log("  test    - Run smoke tests");
       console.log("  agent   - Manage background agents");
+      console.log("  write   - Block writing UI (CLI)");
+      console.log("  crm     - CRM timeline and ROI view");
+      console.log("  inbox   - Inspect ingested artifacts");
+      console.log("  ingest  - Run inbox ingestion");
+      console.log("  clarify - Run/answer clarification queue");
       process.exit(0);
   }
 }
@@ -119,7 +139,12 @@ async function setupCommand() {
   }
   process.env.OPENAI_API_KEY = openaiKey;
 
-  // Step 5: Setup Anthropic (or skip if already configured)
+  // Step 5: Setup required R2 storage
+  if (!await setupRequiredR2(existingEnv)) {
+    return;
+  }
+
+  // Step 6: Setup Anthropic (or skip if already configured)
   let anthropicKey = existingEnv.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
   if (anthropicKey) {
     ok("Anthropic already configured\n");
@@ -138,30 +163,30 @@ async function setupCommand() {
     }
   }
 
-  // Step 6: Optional API keys
+  // Step 7: Optional API keys
   await setupOptionalKeys(existingEnv);
 
-  // Step 7: Verify all services
+  // Step 8: Verify all services
   if (!await verifyAll()) {
     return;
   }
 
-  // Step 8: Store repoPath
+  // Step 9: Store repoPath
   const { resolve } = await import("path");
   const repoRoot = resolve(import.meta.dir, "..");
   try {
     const currentConfig = JSON.parse(await Bun.file(configPath).text());
-    if (!currentConfig.repoPath) {
+    if (currentConfig.repoPath !== repoRoot) {
       currentConfig.repoPath = repoRoot;
       await Bun.write(configPath, JSON.stringify(currentConfig, null, 2) + "\n");
-      ok("Stored repoPath in config");
+      ok("Updated repoPath in config");
     }
   } catch {}
 
-  // Step 9: Install templates
+  // Step 10: Install templates
   await installTemplates();
 
-  // Step 10: Offer deploy
+  // Step 11: Offer deploy
   const shouldStart = prompt("Start daemons now? (y/n): ");
   if (shouldStart?.toLowerCase() === "y") {
     await deployCommand();
@@ -265,7 +290,7 @@ async function checkExistingSupabase(
   // Test connection and check if tables exist
   const client = createClient(url, key);
   try {
-    const { error } = await client.from("messages").select("id").limit(1);
+    const { error } = await client.from("user_blocks").select("id").limit(1);
 
     if (error && (error.code === "42P01" || error.message?.includes("not find the table"))) {
       warn("Supabase credentials exist but tables not found, setting up schema...\n");
@@ -296,7 +321,7 @@ async function checkExistingSupabase(
       prompt("Press Enter when done...");
 
       // Re-verify
-      const { error: retryError } = await client.from("messages").select("id").limit(1);
+      const { error: retryError } = await client.from("user_blocks").select("id").limit(1);
       if (retryError && (retryError.code === "42P01" || retryError.message?.includes("not find the table"))) {
         fail("Tables still not found");
         return null;
@@ -340,6 +365,19 @@ async function checkPrereqs(): Promise<boolean> {
     return false;
   }
   ok("node_modules found");
+
+  const requiredBinaries = [
+    { cmd: "aws", hint: "brew install awscli" },
+    { cmd: "pdftotext", hint: "brew install poppler" },
+    { cmd: "ffmpeg", hint: "brew install ffmpeg" },
+  ];
+  for (const dep of requiredBinaries) {
+    if (!Bun.which(dep.cmd)) {
+      fail(`${dep.cmd} not found (${dep.hint})`);
+      return false;
+    }
+    ok(`${dep.cmd} found`);
+  }
 
   // Check for claude-code-safety-net plugin
   try {
@@ -454,6 +492,42 @@ async function setupOptionalKeys(existingEnv: Record<string, string>) {
   console.log();
 }
 
+async function setupRequiredR2(existingEnv: Record<string, string>): Promise<boolean> {
+  heading("Setting up Cloudflare R2 (required)...");
+
+  const required = [
+    { envVar: "R2_BUCKET", name: "Cloudflare R2 bucket" },
+    { envVar: "R2_ENDPOINT_URL", name: "Cloudflare R2 endpoint URL" },
+    { envVar: "R2_ACCESS_KEY_ID", name: "Cloudflare R2 access key ID" },
+    { envVar: "R2_SECRET_ACCESS_KEY", name: "Cloudflare R2 secret access key" },
+  ] as const;
+
+  const updates: Record<string, string> = {};
+
+  for (const field of required) {
+    const current = existingEnv[field.envVar] || process.env[field.envVar];
+    if (current) {
+      updates[field.envVar] = current;
+      ok(`${field.name} already configured`);
+      continue;
+    }
+
+    const promptText = field.envVar === "R2_SECRET_ACCESS_KEY"
+      ? `Enter ${field.name}: `
+      : `Enter ${field.name}: `;
+    const value = prompt(promptText);
+    if (!value) {
+      fail(`${field.name} is required`);
+      return false;
+    }
+    updates[field.envVar] = value;
+  }
+
+  await updateEnvFile(updates);
+  ok("R2 configuration saved\n");
+  return true;
+}
+
 async function setupSupabase(): Promise<{ url: string; key: string } | null> {
   heading("Setting up Supabase...");
   dim("1. Go to your Supabase project dashboard");
@@ -475,7 +549,7 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
   // Test connection
   const client = createClient(url, key);
   try {
-    const { error } = await client.from("messages").select("id").limit(1);
+    const { error } = await client.from("user_blocks").select("id").limit(1);
 
     if (error && (error.code === "42P01" || error.message?.includes("not find the table"))) {
       console.log();
@@ -508,7 +582,7 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
       prompt("Press Enter when done...");
 
       // Re-verify
-      const { error: retryError } = await client.from("messages").select("id").limit(1);
+      const { error: retryError } = await client.from("user_blocks").select("id").limit(1);
       if (retryError && (retryError.code === "42P01" || retryError.message?.includes("not find the table"))) {
         fail("Tables still not found");
         return null;
@@ -631,13 +705,17 @@ async function installTemplates() {
   const muavinDir = `${homeDir}/.muavin`;
   const templatesDir = `${import.meta.dir}/../templates`;
   const docsDir = `${muavinDir}/docs`;
+  const promptsDir = `${muavinDir}/prompts`;
 
   const systemDir = `${muavinDir}/system`;
   const outboxDir = `${muavinDir}/outbox`;
+  const inboxFilesDir = `${muavinDir}/inbox/files`;
 
   await mkdir(docsDir, { recursive: true });
+  await mkdir(promptsDir, { recursive: true });
   await mkdir(systemDir, { recursive: true });
   await mkdir(outboxDir, { recursive: true });
+  await mkdir(inboxFilesDir, { recursive: true });
 
   // Install CLAUDE.md (only if not exists — don't overwrite personality)
   const claudePath = `${muavinDir}/CLAUDE.md`;
@@ -673,6 +751,29 @@ async function installTemplates() {
     }
   }
   ok(`Installed docs/ (${docFiles.length} files)`);
+
+  // Install prompts (always overwrite)
+  const promptFiles = ["heartbeat-triage.md"];
+  for (const promptFile of promptFiles) {
+    try {
+      const content = await Bun.file(`${templatesDir}/prompts/${promptFile}`).text();
+      await Bun.write(`${promptsDir}/${promptFile}`, content);
+    } catch {
+      fail(`Could not read templates/prompts/${promptFile}`);
+    }
+  }
+  ok(`Installed prompts/ (${promptFiles.length} files)`);
+
+  // Remove stale prompt files that are not part of the active prompt set
+  const { readdir: readDir, unlink: unlinkFile } = await import("fs/promises");
+  const allowedPromptFiles = new Set(promptFiles);
+  const existingPromptFiles = await readDir(promptsDir).catch(() => []);
+  for (const existingFile of existingPromptFiles) {
+    if (existingFile.startsWith(".")) continue;
+    if (!allowedPromptFiles.has(existingFile)) {
+      await unlinkFile(`${promptsDir}/${existingFile}`).catch(() => {});
+    }
+  }
 
   // Install system CLAUDE.md for worker agents (always overwrite)
   const systemClaudePath = `${systemDir}/CLAUDE.md`;
@@ -732,6 +833,15 @@ const configSections: ConfigSection[] = [
       { key: "GEMINI_API_KEY", label: "Gemini API key", source: "env", type: "secret" },
       { key: "OPENROUTER_API_KEY", label: "OpenRouter API key", source: "env", type: "secret" },
       { key: "BRAVE_API_KEY", label: "Brave Search API key", source: "env", type: "secret" },
+    ],
+  },
+  {
+    title: "Storage",
+    fields: [
+      { key: "R2_BUCKET", label: "R2 bucket", source: "env", type: "secret" },
+      { key: "R2_ENDPOINT_URL", label: "R2 endpoint URL", source: "env", type: "secret" },
+      { key: "R2_ACCESS_KEY_ID", label: "R2 access key ID", source: "env", type: "secret" },
+      { key: "R2_SECRET_ACCESS_KEY", label: "R2 secret access key", source: "env", type: "secret" },
     ],
   },
   {
@@ -894,7 +1004,7 @@ async function editField(
     if (url && key) {
       try {
         const client = createClient(url, key);
-        const { error } = await client.from("messages").select("id").limit(1);
+        const { error } = await client.from("user_blocks").select("id").limit(1);
         if (error) {
           fail(`Supabase error: ${error.message}`);
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1110,7 +1220,16 @@ async function deployCommand() {
   // Validate required env vars before building
   const envPath = `${homeDir}/.muavin/.env`;
   const envVars = await parseEnvFile(envPath);
-  const requiredKeys = ["TELEGRAM_BOT_TOKEN", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "OPENAI_API_KEY"];
+  const requiredKeys = [
+    "TELEGRAM_BOT_TOKEN",
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_KEY",
+    "OPENAI_API_KEY",
+    "R2_BUCKET",
+    "R2_ENDPOINT_URL",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+  ];
   const missing = requiredKeys.filter((k) => !envVars[k]);
   if (missing.length > 0) {
     fail(`Missing required env vars: ${missing.join(", ")}\nCheck ~/.muavin/.env`);
@@ -1429,27 +1548,32 @@ async function testCommand() {
   const { validateEnv } = await import("./env");
   validateEnv();
 
-  // Test memory
-  heading("Testing memory...");
-  let supabase: any;
+  // Test block storage and retrieval
+  heading("Testing block storage...");
+  let insertedId = "";
   try {
-    const mem = await import("./memory");
-    supabase = mem.supabase;
-    await mem.logMessage("user", "cli-test", "test");
-    const results = await mem.searchContext("cli-test");
+    const { createUserBlock, searchRelatedBlocks } = await import("./blocks");
+    const { supabase } = await import("./db");
+    const created = await createUserBlock({
+      rawContent: "cli-test block round-trip",
+      source: "cli",
+      sourceRef: { test: true },
+      metadata: { test: true },
+    });
+    insertedId = created.id;
+
+    const results = await searchRelatedBlocks({ query: "cli-test block round-trip", scope: "all", limit: 5 });
     if (results.length > 0) {
-      ok("Memory round-trip successful");
+      ok("Block round-trip successful");
     } else {
-      fail("Memory search returned no results");
+      fail("Block search returned no results");
+    }
+
+    if (insertedId) {
+      await supabase.from("user_blocks").delete().eq("id", insertedId);
     }
   } catch (error) {
-    fail(`Memory test failed: ${error}`);
-  } finally {
-    try {
-      if (supabase) await supabase.from("messages").delete().eq("chat_id", "test").eq("content", "cli-test");
-    } catch (e) {
-      warn(`Memory cleanup failed: ${e}`);
-    }
+    fail(`Block storage test failed: ${error}`);
   }
 
   // Test Telegram
