@@ -145,9 +145,30 @@ async function drainQueues(): Promise<void> {
           if (success) {
             await clearOutboxItems(delivery.claimedFiles);
             console.log(timestamp("relay"), "Delivered outbox item(s) to owner");
+            await logSystemEvent({
+              level: "info",
+              component: "relay",
+              eventType: "outbox_delivery_sent",
+              message: "Delivered outbox item(s) to owner",
+              payload: { claimed_count: delivery.claimedFiles.length, owner_chat_id: config.owner },
+            }).catch(() => {});
           } else {
             console.error(timestamp("relay"), "Outbox delivery send failed, restoring items");
+            await logSystemEvent({
+              level: "error",
+              component: "relay",
+              eventType: "outbox_delivery_send_failed",
+              message: "Outbox delivery send failed; restoring claimed items",
+              payload: { claimed_count: delivery.claimedFiles.length, owner_chat_id: config.owner },
+            }).catch(() => {});
             await restoreUndeliveredOutbox();
+            await logSystemEvent({
+              level: "warn",
+              component: "relay",
+              eventType: "outbox_restored_after_send_failure",
+              message: "Restored undelivered outbox items after send failure",
+              payload: { owner_chat_id: config.owner },
+            }).catch(() => {});
           }
         }
       } else {
@@ -299,9 +320,23 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
   try {
     const outboxItems = await readOutbox();
     if (outboxItems.length === 0) return null;
+    await logSystemEvent({
+      level: "info",
+      component: "relay",
+      eventType: "outbox_items_found",
+      message: "Outbox item(s) pending delivery",
+      payload: { count: outboxItems.length },
+    }).catch(() => {});
 
     // Claim items (rename to .processing) — originals restored on failure
     await claimOutboxItems(outboxItems.map(i => i._filename));
+    await logSystemEvent({
+      level: "info",
+      component: "relay",
+      eventType: "outbox_items_claimed",
+      message: "Claimed outbox item(s) for delivery",
+      payload: { count: outboxItems.length },
+    }).catch(() => {});
 
     // Build voice context
     const appendSystemPrompt = await buildContext({
@@ -330,13 +365,44 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
     if (isSkipResponse(result.text)) {
       console.log(timestamp("relay"), "Outbox delivery skipped by voice");
       await clearOutboxItems(outboxItems.map(i => `${i._filename}.processing`));
+      await logSystemEvent({
+        level: "info",
+        component: "relay",
+        eventType: "outbox_delivery_skipped",
+        message: "Outbox delivery skipped by model response",
+        payload: { count: outboxItems.length },
+      }).catch(() => {});
       return null;
     }
 
-    return { text: result.text, claimedFiles: outboxItems.map(i => `${i._filename}.processing`) };
+    const claimedFiles = outboxItems.map(i => `${i._filename}.processing`);
+    await logSystemEvent({
+      level: "info",
+      component: "relay",
+      eventType: "outbox_delivery_prepared",
+      message: "Prepared outbox delivery message",
+      payload: {
+        count: outboxItems.length,
+        text_chars: result.text.length,
+        provider: result.provider,
+      },
+    }).catch(() => {});
+    return { text: result.text, claimedFiles };
   } catch (error) {
     console.error(timestamp("relay"), "Error in prepareOutbox:", error);
+    await logSystemEvent({
+      level: "error",
+      component: "relay",
+      eventType: "outbox_prepare_failed",
+      message: formatError(error),
+    }).catch(() => {});
     await restoreUndeliveredOutbox();
+    await logSystemEvent({
+      level: "warn",
+      component: "relay",
+      eventType: "outbox_restored_after_prepare_failure",
+      message: "Restored undelivered outbox items after prepare failure",
+    }).catch(() => {});
     return null;
   }
 }
