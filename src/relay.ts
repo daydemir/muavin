@@ -11,7 +11,7 @@ import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, w
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
 import { createMuaBlock, createUserBlock, ingestFileArtifactFromPath } from "./blocks";
 import { logSystemEvent } from "./events";
-import { runLLM } from "./llm";
+import { runLLM, type LlmTask } from "./llm";
 import { runBackgroundPrompt } from "./background-llm";
 
 validateEnv();
@@ -237,6 +237,7 @@ function buildTelegramConversationPrompt(ctx: Context, prompt: string): { fullPr
 }
 
 async function generateVoiceReply(input: {
+  task: LlmTask;
   query: string;
   prompt: string;
   chatId: number;
@@ -252,7 +253,7 @@ async function generateVoiceReply(input: {
   });
 
   return runLLM({
-    task: "telegram_conversation",
+    task: input.task,
     prompt: input.prompt,
     sessionId: input.sessionId,
     contextPrompt,
@@ -289,6 +290,7 @@ async function processUserMessage(item: QueuedUserMessage): Promise<void> {
     const session = getSession(sessions, chatId);
 
     const result = await generateVoiceReply({
+      task: "telegram_conversation",
       query: prompt,
       prompt: fullPrompt,
       chatId: numericChatId,
@@ -368,6 +370,7 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
     const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIMPORTANT:\n- Check [Recent Conversation] in your context for any prior discussion of these topics\n- If an issue was already delivered or discussed within the last 20 turns, respond with SKIP\n- Do not acknowledge redundancy ("already covered this...") and then re-explain — just SKIP\n- Only deliver genuinely new information or actionable updates\n- Be aggressive about silence on known issues\n\nIf nothing is worth delivering, respond with exactly: SKIP\n\nIf delivering, be concise and focus only on what's new or actionable.`;
 
     const result = await generateVoiceReply({
+      task: "outbox_delivery",
       query: "outbox delivery",
       prompt,
       chatId: config.owner,

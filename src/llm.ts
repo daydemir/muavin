@@ -1,6 +1,7 @@
 import { callClaude } from "./claude";
 
 export type LlmProvider = "claude-cli";
+export type LlmRole = "conductor" | "worker";
 
 export type LlmTask =
   | "telegram_conversation"
@@ -10,6 +11,16 @@ export type LlmTask =
   | "block_processor"
   | "artifact_processor"
   | "heartbeat_triage";
+
+export const TASK_ROLE: Record<LlmTask, LlmRole> = {
+  telegram_conversation: "conductor",
+  outbox_delivery: "conductor",
+  agent_run: "worker",
+  job_prompt: "worker",
+  block_processor: "worker",
+  artifact_processor: "worker",
+  heartbeat_triage: "worker",
+};
 
 export type LlmToolPolicy = "default" | "no_background_claude_shell";
 
@@ -35,6 +46,7 @@ export interface LlmResponse {
   durationMs: number;
   structuredOutput?: unknown;
   provider: LlmProvider;
+  role: LlmRole;
 }
 
 interface LlmAdapter {
@@ -74,6 +86,7 @@ const claudeAdapter: LlmAdapter = {
     return {
       ...result,
       provider: "claude-cli",
+      role: TASK_ROLE[req.task],
     };
   },
 };
