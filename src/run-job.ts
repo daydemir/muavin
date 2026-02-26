@@ -5,6 +5,7 @@ import { cleanupAgents, buildContext, cleanupUploads } from "./agents";
 import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime, formatError, acquireLock, releaseLock, type Config } from "./utils";
 import type { Job } from "./jobs";
 import { buildClarificationDigest, ingestFilesInbox, processPendingState } from "./blocks";
+import { logSystemEvent } from "./events";
 
 validateEnv();
 
@@ -154,6 +155,14 @@ try {
   }
 } catch (error) {
   console.error(`[${jobId}] error:`, error);
+  await logSystemEvent({
+    level: "error",
+    component: "jobs",
+    eventType: "run_job_failed",
+    message: formatError(error),
+    runId: jobId,
+    payload: { jobName: job.name ?? jobId },
+  }).catch(() => {});
   await writeOutbox({
     source: "job",
     sourceId: jobId,

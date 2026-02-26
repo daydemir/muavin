@@ -26,7 +26,7 @@ async function spawnWorker<T>(command: string, input: object): Promise<T> {
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
-    if (exitCode !== 0) throw new Error(`memory-worker ${command} failed: ${stderr}`);
+    if (exitCode !== 0) throw new Error(`context-worker ${command} failed: ${stderr}`);
     return JSON.parse(stdout) as T;
   } finally {
     clearTimeout(timeout);
@@ -216,7 +216,7 @@ export async function buildContext(opts: {
     } catch {}
   }
 
-  // 2 & 3. Semantic search + recent messages via subprocess (avoids bun connection pool issues)
+  // 2 & 3. Semantic search + recent conversation blocks via subprocess
   type SearchResult = Array<{ content: string; source: string; similarity: number }>;
   type RecentResult = Array<{ role: string; content: string; created_at: string }>;
 
@@ -235,8 +235,8 @@ export async function buildContext(opts: {
 
   if (searchFailed || recentFailed) {
     const missing = [
-      searchFailed && "memory search",
-      recentFailed && "recent messages",
+      searchFailed && "block search",
+      recentFailed && "recent conversation blocks",
     ].filter(Boolean).join(" and ");
     parts.push(`[System Warning] ${missing} failed — you are responding without full context.`);
   }
@@ -245,14 +245,14 @@ export async function buildContext(opts: {
     const contextStr = contextResults
       .map((r) => `[${r.source}] ${r.content}`)
       .join("\n");
-    parts.push(`[Memory]\n${contextStr}`);
+    parts.push(`[Relevant Blocks]\n${contextStr}`);
   }
 
   if (recent.length > 0) {
     const recentStr = recent
       .map((m) => `${m.role}: ${m.content}`)
       .join("\n");
-    parts.push(`[Recent Messages]\n${recentStr}`);
+    parts.push(`[Recent Conversation]\n${recentStr}`);
   }
 
   // 4. Agent summary (voice only)

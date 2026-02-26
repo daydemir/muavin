@@ -84,11 +84,18 @@ export async function sendAndLog(
   text: string,
   opts?: { parseMode?: string },
 ): Promise<boolean> {
-  const { logMessage } = await import("./memory");
+  const { createMuaBlock } = await import("./blocks");
   const success = await sendTelegram(chatId, text, opts);
   if (success) {
-    logMessage("assistant", text, String(chatId)).catch(e =>
-      console.error("sendAndLog logMessage failed:", e)
+    createMuaBlock({
+      content: text,
+      source: "chat",
+      sourceRef: { chat_id: String(chatId) },
+      metadata: { direction: "outbound", kind: "telegram_send" },
+      blockKind: "note",
+      confidence: 1,
+    }).catch(e =>
+      console.error("sendAndLog createMuaBlock failed:", e),
     );
   }
   return success;

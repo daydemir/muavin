@@ -5,11 +5,12 @@ import { watch } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { callClaude, killAllChildren, waitForChildren, activeChildPids } from "./claude";
-import { logMessage } from "./memory";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
 import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, claimOutboxItems, restoreUndeliveredOutbox, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
+import { createMuaBlock, createUserBlock, ingestFileArtifactFromPath } from "./blocks";
+import { logSystemEvent } from "./events";
 
 validateEnv();
 
@@ -98,7 +99,15 @@ const sessions = await loadSessions();
 
 // ── Message queue (two-array queue) ─────────────────────────
 
-const userQueue: Array<{ ctx: Context; prompt: string }> = [];
+interface QueuedUserMessage {
+  ctx: Context;
+  prompt: string;
+  inboundContent: string;
+  sourceRef?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+const userQueue: QueuedUserMessage[] = [];
 let outboxPending = false;
 let processing = false;
 
@@ -117,7 +126,7 @@ async function drainQueues(): Promise<void> {
       // Process user messages first
       while (userQueue.length > 0) {
         const item = userQueue.shift()!;
-        await processUserMessage(item.ctx, item.prompt);
+        await processUserMessage(item);
       }
 
       if (outboxPending) {
@@ -128,7 +137,7 @@ async function drainQueues(): Promise<void> {
           // Drain user messages that arrived during formatting
           while (userQueue.length > 0) {
             const item = userQueue.shift()!;
-            await processUserMessage(item.ctx, item.prompt);
+            await processUserMessage(item);
           }
 
           const success = await sendAndLog(config.owner, delivery.text, { parseMode: "Markdown" });
@@ -149,12 +158,66 @@ async function drainQueues(): Promise<void> {
   }
 }
 
-async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
+function telegramSourceRef(ctx: Context): Record<string, unknown> {
+  return {
+    chat_id: String(ctx.chat?.id ?? ""),
+    message_id: ctx.message?.message_id ?? null,
+  };
+}
+
+function telegramMetadata(ctx: Context, direction: "inbound" | "outbound"): Record<string, unknown> {
+  return {
+    direction,
+    chat_type: ctx.chat?.type ?? "unknown",
+    sender_id: ctx.from?.id ?? null,
+    sender_name: ctx.from?.first_name ?? null,
+    sender_username: ctx.from?.username ?? null,
+  };
+}
+
+async function logUserTelegramBlock(ctx: Context, content: string, opts?: {
+  sourceRef?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  await createUserBlock({
+    rawContent: content,
+    source: "chat",
+    sourceRef: opts?.sourceRef ?? telegramSourceRef(ctx),
+    metadata: { ...telegramMetadata(ctx, "inbound"), ...(opts?.metadata ?? {}) },
+  });
+}
+
+async function logMuaTelegramBlock(ctx: Context, content: string, metadata: Record<string, unknown> = {}): Promise<void> {
+  await createMuaBlock({
+    content,
+    source: "chat",
+    sourceRef: telegramSourceRef(ctx),
+    metadata: { ...telegramMetadata(ctx, "outbound"), ...metadata },
+    blockKind: "note",
+    confidence: 1,
+  });
+}
+
+async function processUserMessage(item: QueuedUserMessage): Promise<void> {
+  const { ctx, prompt, inboundContent, sourceRef, metadata } = item;
   const typingInterval = setInterval(() => {
     ctx.replyWithChatAction("typing").catch(() => {});
   }, TYPING_INTERVAL_MS);
 
   try {
+    await logUserTelegramBlock(ctx, inboundContent, {
+      sourceRef,
+      metadata,
+    }).catch(async (persistError) => {
+      await logSystemEvent({
+        level: "error",
+        component: "relay",
+        eventType: "inbound_block_persist_failed",
+        message: formatError(persistError),
+        payload: { prompt: inboundContent.slice(0, 300), chat_id: ctx.chat?.id ?? null },
+      }).catch(() => {});
+    });
+
     // Build context
     const numericChatId = ctx.chat?.id ?? 0;
     const appendSystemPrompt = await buildContext({
@@ -195,15 +258,13 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
     };
     await saveSessions(sessions);
 
-    // Log messages (block reply if persistence fails to keep telegram/supabase in sync)
-    await logMessage("user", prompt, chatId);
-    await logMessage("assistant", result.text, chatId);
-
     // Check if Claude wants to skip (internal signal, not sent to user)
     if (isSkipResponse(result.text)) {
       console.log(timestamp("relay"), "Response skipped (SKIP signal)");
       return;
     }
+
+    await logMuaTelegramBlock(ctx, result.text, { kind: "relay_reply" });
 
     if (!result.text.trim()) {
       await ctx.reply("Done.");
@@ -213,9 +274,13 @@ async function processUserMessage(ctx: Context, prompt: string): Promise<void> {
   } catch (error) {
     console.error("Error in processUserMessage:", error);
     const errorMsg = `Error: ${formatError(error)}`;
-    const chatId = String(ctx.chat?.id ?? "");
-    await logMessage("user", prompt, chatId);
-    await logMessage("assistant", errorMsg, chatId);
+    await logSystemEvent({
+      level: "error",
+      component: "relay",
+      eventType: "process_user_message_failed",
+      message: errorMsg,
+      payload: { prompt: prompt.slice(0, 500), chat_id: ctx.chat?.id ?? null },
+    }).catch(() => {});
     await ctx.reply(errorMsg);
   } finally {
     clearInterval(typingInterval);
@@ -248,7 +313,7 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
       `${idx + 1}. [${item.source}${item.sourceId ? `:${item.sourceId}` : ""}] ${item.task ?? ""}:\n${item.result}`
     ).join("\n\n");
 
-    const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIMPORTANT:\n- Check [Recent Messages] in your context for any prior discussion of these topics\n- If an issue was already delivered or discussed within the last 20 messages, respond with SKIP\n- Do not acknowledge redundancy ("already covered this...") and then re-explain — just SKIP\n- Only deliver genuinely new information or actionable updates\n- Be aggressive about silence on known issues\n\nIf nothing is worth delivering, respond with exactly: SKIP\n\nIf delivering, be concise and focus only on what's new or actionable.`;
+    const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIMPORTANT:\n- Check [Recent Conversation] in your context for any prior discussion of these topics\n- If an issue was already delivered or discussed within the last 20 turns, respond with SKIP\n- Do not acknowledge redundancy ("already covered this...") and then re-explain — just SKIP\n- Only deliver genuinely new information or actionable updates\n- Be aggressive about silence on known issues\n\nIf nothing is worth delivering, respond with exactly: SKIP\n\nIf delivering, be concise and focus only on what's new or actionable.`;
 
     const result = await callClaude(prompt, {
       appendSystemPrompt,
@@ -483,29 +548,21 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
-// ── Commands ────────────────────────────────────────────────
-
-bot.command("new", async (ctx) => {
-  const chatId = String(ctx.chat?.id ?? "unknown");
-  sessions[chatId] = { sessionId: null, updatedAt: new Date().toISOString() };
-  await saveSessions(sessions);
-  await ctx.reply("Fresh session started.");
-});
-
-bot.command("status", async (ctx) => {
-  const chatId = String(ctx.chat?.id ?? "unknown");
-  const session = getSession(sessions, chatId);
-  await ctx.reply(
-    `Session: ${session.sessionId ? session.sessionId.slice(0, 8) + "..." : "none"}\n` +
-      `Last activity: ${session.updatedAt}`,
-  );
-});
-
 // ── Core message handler ────────────────────────────────────
 
-async function handleMessage(ctx: Context, prompt: string): Promise<void> {
+async function handleMessage(ctx: Context, prompt: string, opts?: {
+  inboundContent?: string;
+  sourceRef?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
   await ctx.replyWithChatAction("typing");
-  userQueue.push({ ctx, prompt });
+  userQueue.push({
+    ctx,
+    prompt,
+    inboundContent: opts?.inboundContent ?? prompt,
+    sourceRef: opts?.sourceRef,
+    metadata: opts?.metadata,
+  });
   scheduleQueue();
 }
 
@@ -522,18 +579,22 @@ bot.on("message:text", async (ctx) => {
     if (!isReply && !isMentioned) return;
   }
 
-  await handleMessage(ctx, text);
+  await handleMessage(ctx, text, {
+    inboundContent: text,
+    sourceRef: telegramSourceRef(ctx),
+  });
 });
 
 // ── Photos ──────────────────────────────────────────────────
 
 bot.on("message:photo", async (ctx) => {
+  let filePath: string | null = null;
   try {
     const photos = ctx.message.photo;
     const photo = photos[photos.length - 1];
     const file = await ctx.api.getFile(photo.file_id);
 
-    const filePath = join(UPLOADS_DIR, `photo_${Date.now()}.jpg`);
+    filePath = join(UPLOADS_DIR, `photo_${Date.now()}.jpg`);
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
       { keepalive: false, signal: AbortSignal.timeout(30_000) } as RequestInit,
@@ -541,13 +602,47 @@ bot.on("message:photo", async (ctx) => {
     if (!res.ok) throw new Error(`Photo download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
 
-    const caption = ctx.message.caption || "Analyze this image.";
-    await handleMessage(ctx, `[User sent a file: ${filePath}] ${caption}`);
+    const caption = (ctx.message.caption || "").trim();
+    const artifact = await ingestFileArtifactFromPath({
+      filePath,
+      sourceType: "file",
+      title: `photo_${Date.now()}.jpg`,
+      metadata: {
+        channel: "telegram",
+        source_ref: telegramSourceRef(ctx),
+        telegram_photo_file_id: photo.file_id,
+      },
+    });
+
+    const inboundContent = caption
+      ? `shared a photo. ${caption}`
+      : "shared a photo.";
+    const prompt = caption
+      ? `I shared a photo (${artifact.artifactId}). ${caption}`
+      : `I shared a photo (${artifact.artifactId}).`;
+
+    await handleMessage(ctx, prompt, {
+      inboundContent,
+      sourceRef: {
+        ...telegramSourceRef(ctx),
+        artifact_id: artifact.artifactId,
+      },
+      metadata: { attachment_type: "photo", artifact_id: artifact.artifactId },
+    });
   } catch (error) {
     console.error("Photo error:", error);
-    const chatId = String(ctx.chat?.id ?? "");
-    await logMessage("assistant", "Could not process photo.", chatId);
+    await logSystemEvent({
+      level: "error",
+      component: "relay",
+      eventType: "photo_ingest_failed",
+      message: formatError(error),
+      payload: { chat_id: ctx.chat?.id ?? null, message_id: ctx.message?.message_id ?? null },
+    }).catch(() => {});
     await ctx.reply("Could not process photo.");
+  } finally {
+    if (filePath) {
+      await unlink(filePath).catch(() => {});
+    }
   }
 });
 
@@ -555,10 +650,11 @@ bot.on("message:photo", async (ctx) => {
 
 bot.on("message:document", async (ctx) => {
   const doc = ctx.message.document;
+  let filePath: string | null = null;
   try {
     const file = await ctx.getFile();
     const fileName = doc.file_name || `file_${Date.now()}`;
-    const filePath = join(UPLOADS_DIR, `${Date.now()}_${fileName}`);
+    filePath = join(UPLOADS_DIR, `${Date.now()}_${fileName}`);
 
     const res = await fetch(
       `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`,
@@ -567,13 +663,47 @@ bot.on("message:document", async (ctx) => {
     if (!res.ok) throw new Error(`Document download failed: ${res.status} ${res.statusText}`);
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
 
-    const caption = ctx.message.caption || `Analyze: ${doc.file_name}`;
-    await handleMessage(ctx, `[User sent a file: ${filePath}] ${caption}`);
+    const caption = (ctx.message.caption || "").trim();
+    const artifact = await ingestFileArtifactFromPath({
+      filePath,
+      sourceType: "file",
+      title: fileName,
+      metadata: {
+        channel: "telegram",
+        source_ref: telegramSourceRef(ctx),
+        telegram_document_file_id: doc.file_id,
+      },
+    });
+
+    const inboundContent = caption
+      ? `shared a document (${fileName}). ${caption}`
+      : `shared a document (${fileName}).`;
+    const prompt = caption
+      ? `I shared a document (${fileName}, artifact ${artifact.artifactId}). ${caption}`
+      : `I shared a document (${fileName}, artifact ${artifact.artifactId}).`;
+
+    await handleMessage(ctx, prompt, {
+      inboundContent,
+      sourceRef: {
+        ...telegramSourceRef(ctx),
+        artifact_id: artifact.artifactId,
+      },
+      metadata: { attachment_type: "document", artifact_id: artifact.artifactId, file_name: fileName },
+    });
   } catch (error) {
     console.error("Document error:", error);
-    const chatId = String(ctx.chat?.id ?? "");
-    await logMessage("assistant", "Could not process document.", chatId);
+    await logSystemEvent({
+      level: "error",
+      component: "relay",
+      eventType: "document_ingest_failed",
+      message: formatError(error),
+      payload: { chat_id: ctx.chat?.id ?? null, message_id: ctx.message?.message_id ?? null },
+    }).catch(() => {});
     await ctx.reply("Could not process document.");
+  } finally {
+    if (filePath) {
+      await unlink(filePath).catch(() => {});
+    }
   }
 });
 
