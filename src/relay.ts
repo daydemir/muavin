@@ -220,6 +220,48 @@ async function logMuaTelegramBlock(ctx: Context, content: string, metadata: Reco
   });
 }
 
+function buildTelegramConversationPrompt(ctx: Context, prompt: string): { fullPrompt: string; chatId: number } {
+  const chatId = ctx.chat?.id ?? 0;
+  const now = new Date();
+  const timeStr = formatLocalTime(now);
+  const chatType = ctx.chat?.type ?? "private";
+  const senderName = ctx.from?.first_name ?? "User";
+  let fullPrompt = `Current time: ${timeStr}\nChannel: ${chatType}`;
+  if (chatType !== "private") {
+    fullPrompt += `\nSender: ${senderName}\nNote: Address ${senderName} by name. Be concise in group chats.`;
+  }
+  fullPrompt += `\n\n${prompt}`;
+  fullPrompt += `\nChatId: ${chatId}`;
+  return { fullPrompt, chatId };
+}
+
+async function generateVoiceReply(input: {
+  query: string;
+  prompt: string;
+  chatId: number;
+  sessionId?: string;
+  ephemeral?: boolean;
+  toolPolicy?: "default" | "no_background_claude_shell";
+}): Promise<Awaited<ReturnType<typeof runLLM>>> {
+  const contextPrompt = await buildContext({
+    query: input.query,
+    chatId: input.chatId,
+    recentCount: config.recentMessageCount ?? 20,
+    full: true,
+  });
+
+  return runLLM({
+    task: "telegram_conversation",
+    prompt: input.prompt,
+    sessionId: input.sessionId,
+    contextPrompt,
+    timeoutMs: config.relayTimeoutMs ?? 600000,
+    maxTurns: config.relayMaxTurns ?? 100,
+    toolPolicy: input.toolPolicy,
+    ephemeral: input.ephemeral,
+  });
+}
+
 async function processUserMessage(item: QueuedUserMessage): Promise<void> {
   const { ctx, prompt, inboundContent, sourceRef, metadata } = item;
   const typingInterval = setInterval(() => {
@@ -240,39 +282,18 @@ async function processUserMessage(item: QueuedUserMessage): Promise<void> {
       }).catch(() => {});
     });
 
-    // Build context
-    const numericChatId = ctx.chat?.id ?? 0;
-    const appendSystemPrompt = await buildContext({
-      query: prompt,
-      chatId: numericChatId,
-      recentCount: config.recentMessageCount ?? 20,
-      full: true,
-    });
-
-    // Build prompt with time context
-    const now = new Date();
-    const timeStr = formatLocalTime(now);
-
-    const chatType = ctx.chat?.type ?? "private";
-    const senderName = ctx.from?.first_name ?? "User";
-    let fullPrompt = `Current time: ${timeStr}\nChannel: ${chatType}`;
-    if (chatType !== "private") {
-      fullPrompt += `\nSender: ${senderName}\nNote: Address ${senderName} by name. Be concise in group chats.`;
-    }
-    fullPrompt += `\n\n${prompt}`;
-    fullPrompt += `\nChatId: ${numericChatId}`;
+    const { fullPrompt, chatId: numericChatId } = buildTelegramConversationPrompt(ctx, prompt);
 
     const chatId = String(ctx.chat?.id ?? "unknown");
     const session = getSession(sessions, chatId);
 
-    const result = await runLLM({
-      task: "telegram_conversation",
+    const result = await generateVoiceReply({
+      query: prompt,
       prompt: fullPrompt,
+      chatId: numericChatId,
       sessionId: session.sessionId ?? undefined,
-      contextPrompt: appendSystemPrompt,
-      timeoutMs: config.relayTimeoutMs ?? 600000,
-      maxTurns: config.relayMaxTurns ?? 100,
       toolPolicy: "no_background_claude_shell",
+      ephemeral: false,
     });
 
     // Save session
@@ -338,14 +359,6 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
       payload: { count: outboxItems.length },
     }).catch(() => {});
 
-    // Build voice context
-    const appendSystemPrompt = await buildContext({
-      query: "outbox delivery",
-      chatId: config.owner,
-      recentCount: config.recentMessageCount ?? 20,
-      full: true,
-    });
-
     // Build prompt listing outbox items
     const itemsList = outboxItems.map((item, idx) =>
       `${idx + 1}. [${item.source}${item.sourceId ? `:${item.sourceId}` : ""}] ${item.task ?? ""}:\n${item.result}`
@@ -353,12 +366,10 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
 
     const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIMPORTANT:\n- Check [Recent Conversation] in your context for any prior discussion of these topics\n- If an issue was already delivered or discussed within the last 20 turns, respond with SKIP\n- Do not acknowledge redundancy ("already covered this...") and then re-explain — just SKIP\n- Only deliver genuinely new information or actionable updates\n- Be aggressive about silence on known issues\n\nIf nothing is worth delivering, respond with exactly: SKIP\n\nIf delivering, be concise and focus only on what's new or actionable.`;
 
-    const result = await runLLM({
-      task: "outbox_delivery",
+    const result = await generateVoiceReply({
+      query: "outbox delivery",
       prompt,
-      contextPrompt: appendSystemPrompt,
-      timeoutMs: config.relayTimeoutMs ?? 600000,
-      maxTurns: config.relayMaxTurns ?? 100,
+      chatId: config.owner,
       ephemeral: true,
     });
 
