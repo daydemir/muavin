@@ -136,6 +136,14 @@ async function setupCommand() {
   }
   console.log();
 
+  heading("Setup inputs you'll need:");
+  dim("- Telegram bot token + your Telegram user ID");
+  dim("- Supabase project URL + service_role key");
+  dim("- OpenAI API key");
+  dim("- Cloudflare R2 bucket + endpoint + access key + secret");
+  dim("- Anthropic API key (required for Claude-backed runtime)\n");
+  dim("Fresh-start note: setup recreates ~/.muavin templates/jobs when missing.\n");
+
   // Step 1: Check prerequisites
   if (!await checkPrereqs()) {
     return;
@@ -231,6 +239,9 @@ async function setupCommand() {
 
   console.log();
   ok("Setup complete!");
+  heading("Next steps:");
+  dim("- For immediate TUI writing tests: bun muavin write");
+  dim("- To launch background services: bun muavin start");
 }
 
 async function parseEnvFile(envPath: string): Promise<Record<string, string>> {
@@ -531,6 +542,10 @@ async function setupOptionalKeys(existingEnv: Record<string, string>) {
 
 async function setupRequiredR2(existingEnv: Record<string, string>): Promise<boolean> {
   heading("Setting up Cloudflare R2 (required)...");
+  dim("1. Cloudflare Dashboard → R2");
+  dim("2. Create/select bucket");
+  dim("3. Settings → S3 API → create access key");
+  dim("4. Copy bucket name, S3 endpoint, access key ID, secret key\n");
 
   const required = [
     { envVar: "R2_BUCKET", name: "Cloudflare R2 bucket" },
