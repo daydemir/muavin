@@ -12,6 +12,7 @@ import { sendAndLog, toTelegramMarkdown } from "./telegram";
 import { createMuaBlock, createUserBlock, ingestFileArtifactFromPath } from "./blocks";
 import { logSystemEvent } from "./events";
 import { runLLM } from "./llm";
+import { runBackgroundPrompt } from "./background-llm";
 
 validateEnv();
 
@@ -468,19 +469,13 @@ async function runAgent(agent: AgentFile): Promise<void> {
 
     console.log(timestamp("relay"), `Starting agent ${agent.id}: "${agent.task}"`);
 
-    // Build worker context (not full voice context)
-    const appendSystemPrompt = await buildContext({
-      query: agent.task,
-      chatId: agent.chatId,
-      full: false,
-    });
-
-    // Call Claude
-    const result = await runLLM({
+    const result = await runBackgroundPrompt({
       task: "agent_run",
+      query: agent.task,
       prompt: agent.prompt,
-      contextPrompt: appendSystemPrompt,
-      ephemeral: true,
+      chatId: agent.chatId,
+      includeContext: true,
+      fullContext: false,
       cwd: join(MUAVIN_DIR, "system"),
       timeoutMs: config.agentTimeoutMs ?? 600000,
       maxTurns: config.agentMaxTurns ?? 100,

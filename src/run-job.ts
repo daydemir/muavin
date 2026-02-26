@@ -1,11 +1,11 @@
 import { validateEnv } from "./env";
 import { join } from "path";
-import { cleanupAgents, buildContext, cleanupUploads } from "./agents";
+import { cleanupAgents, cleanupUploads } from "./agents";
 import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime, formatError, acquireLock, releaseLock, type Config } from "./utils";
 import type { Job } from "./jobs";
 import { buildClarificationDigest, ingestFilesInbox, processPendingState } from "./blocks";
 import { logSystemEvent } from "./events";
-import { runLLM } from "./llm";
+import { runBackgroundPrompt } from "./background-llm";
 
 validateEnv();
 
@@ -124,18 +124,14 @@ try {
   } else if (job.prompt) {
     const timeStr = formatLocalTime(now);
     const fullPrompt = `[Job: ${jobId}] Time: ${timeStr}\n\n${job.prompt}`;
-    const appendSystemPrompt = job.skipContext
-      ? ""
-      : await buildContext({
-          query: job.prompt,
-          chatId: config.owner,
-          recentCount: config.recentMessageCount ?? 100,
-        });
-    const result = await runLLM({
+    const result = await runBackgroundPrompt({
       task: "job_prompt",
+      query: job.prompt,
       prompt: fullPrompt,
-      contextPrompt: appendSystemPrompt,
-      ephemeral: true,
+      chatId: config.owner,
+      includeContext: !job.skipContext,
+      fullContext: true,
+      recentCount: config.recentMessageCount ?? 100,
       maxTurns: config.jobMaxTurns ?? 100,
       timeoutMs: job.timeoutMs ?? config.jobTimeoutMs ?? 600000,
       model: job.model,
