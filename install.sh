@@ -32,6 +32,27 @@ if ! command -v claude &>/dev/null; then
 fi
 echo "  ✓ Claude CLI found"
 
+ensure_dep() {
+  local cmd="$1"
+  local brew_pkg="$2"
+  if command -v "$cmd" &>/dev/null; then
+    echo "  ✓ $cmd found"
+    return
+  fi
+  if command -v brew &>/dev/null; then
+    echo "Installing $brew_pkg..."
+    brew install "$brew_pkg"
+    echo "  ✓ $cmd installed"
+    return
+  fi
+  echo "Error: $cmd is required. Install $brew_pkg and re-run."
+  exit 1
+}
+
+ensure_dep aws awscli
+ensure_dep pdftotext poppler
+ensure_dep ffmpeg ffmpeg
+
 # Clone repo
 if [[ -d "$INSTALL_DIR" ]]; then
   echo "  ✓ Muavin already cloned at $INSTALL_DIR"

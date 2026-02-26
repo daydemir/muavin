@@ -15,6 +15,10 @@ export function validateEnv(): void {
     "SUPABASE_URL",
     "SUPABASE_SERVICE_KEY",
     "OPENAI_API_KEY",
+    "R2_BUCKET",
+    "R2_ENDPOINT_URL",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
   ];
   const missing = required.filter((k) => !process.env[k]);
   if (missing.length > 0) {

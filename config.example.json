@@ -9,6 +9,7 @@
   "jobMaxTurns": 100,
   "agentTimeoutMs": 10800000,
   "agentMaxTurns": 100,
+  "filesInboxDir": "",
   "recentMessageCount": 10,
   "cleanupRetentionDays": 7,
   "startOnLogin": true

@@ -30,6 +30,7 @@ export interface Config {
   agentTimeoutMs?: number;
   agentMaxTurns?: number;
   agentConcurrency?: number;
+  filesInboxDir?: string;
   // Extensible for CLI editor
   [key: string]: unknown;
 }

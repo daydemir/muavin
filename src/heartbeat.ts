@@ -99,11 +99,47 @@ async function checkSupabase(): Promise<string | null> {
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_KEY!,
     );
-    const { error } = await supabase.from("messages").select("id").limit(1);
+    const { error } = await supabase.from("user_blocks").select("id").limit(1);
     if (error) return `Supabase error: ${error.message}`;
     return null;
   } catch (e) {
     return `Supabase unreachable: ${formatError(e)}`;
+  }
+}
+
+async function checkR2(): Promise<string | null> {
+  const required = ["R2_BUCKET", "R2_ENDPOINT_URL", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"] as const;
+  const missing = required.filter((key) => !process.env[key]);
+  if (missing.length > 0) {
+    return `R2 env missing: ${missing.join(", ")}`;
+  }
+
+  if (!Bun.which("aws")) {
+    return "aws CLI not found (required for R2 uploads)";
+  }
+
+  try {
+    const proc = Bun.spawn(
+      ["aws", "s3", "ls", `s3://${process.env.R2_BUCKET}`, "--endpoint-url", process.env.R2_ENDPOINT_URL!, "--no-paginate"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          AWS_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID!,
+          AWS_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY!,
+          AWS_DEFAULT_REGION: process.env.R2_REGION ?? "auto",
+        },
+      },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+    if (proc.exitCode !== 0) {
+      return `R2 check failed: ${stderr.trim() || `aws exit ${proc.exitCode}`}`;
+    }
+    return null;
+  } catch (e) {
+    return `R2 unreachable: ${formatError(e)}`;
   }
 }
 
@@ -246,6 +282,7 @@ async function main() {
     checkRelayLock(),
     checkJobPlists(),
     checkSupabase(),
+    checkR2(),
     checkOpenAI(),
     checkTelegram(),
     checkErrorLogs(state.lastRun),
