@@ -4,13 +4,14 @@ import { writeFile, mkdir, unlink } from "fs/promises";
 import { watch } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { callClaude, killAllChildren, waitForChildren, activeChildPids } from "./claude";
+import { killAllChildren, waitForChildren, activeChildPids } from "./claude";
 import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
 import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, claimOutboxItems, restoreUndeliveredOutbox, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
 import { createMuaBlock, createUserBlock, ingestFileArtifactFromPath } from "./blocks";
 import { logSystemEvent } from "./events";
+import { runLLM } from "./llm";
 
 validateEnv();
 
@@ -243,12 +244,14 @@ async function processUserMessage(item: QueuedUserMessage): Promise<void> {
     const chatId = String(ctx.chat?.id ?? "unknown");
     const session = getSession(sessions, chatId);
 
-    const result = await callClaude(fullPrompt, {
-      resume: session.sessionId ?? undefined,
-      appendSystemPrompt,
+    const result = await runLLM({
+      task: "telegram_conversation",
+      prompt: fullPrompt,
+      sessionId: session.sessionId ?? undefined,
+      contextPrompt: appendSystemPrompt,
       timeoutMs: config.relayTimeoutMs ?? 600000,
       maxTurns: config.relayMaxTurns ?? 100,
-      disallowedTools: ["Bash(claude*)"],
+      toolPolicy: "no_background_claude_shell",
     });
 
     // Save session
@@ -315,11 +318,13 @@ async function prepareOutbox(): Promise<OutboxDelivery | null> {
 
     const prompt = `You are muavin. The following are results from your background workers (sub-agents and jobs).\nYour job is to relay these to the user — summarize, interpret, and editorialize as you see fit.\nYou are the manager; these are employee reports. Deliver them as YOUR communication to YOUR user.\n\nResults to deliver:\n\n${itemsList}\n\nIMPORTANT:\n- Check [Recent Conversation] in your context for any prior discussion of these topics\n- If an issue was already delivered or discussed within the last 20 turns, respond with SKIP\n- Do not acknowledge redundancy ("already covered this...") and then re-explain — just SKIP\n- Only deliver genuinely new information or actionable updates\n- Be aggressive about silence on known issues\n\nIf nothing is worth delivering, respond with exactly: SKIP\n\nIf delivering, be concise and focus only on what's new or actionable.`;
 
-    const result = await callClaude(prompt, {
-      appendSystemPrompt,
+    const result = await runLLM({
+      task: "outbox_delivery",
+      prompt,
+      contextPrompt: appendSystemPrompt,
       timeoutMs: config.relayTimeoutMs ?? 600000,
       maxTurns: config.relayMaxTurns ?? 100,
-      noSessionPersistence: true,
+      ephemeral: true,
     });
 
     if (isSkipResponse(result.text)) {
@@ -394,9 +399,11 @@ async function runAgent(agent: AgentFile): Promise<void> {
     });
 
     // Call Claude
-    const result = await callClaude(agent.prompt, {
-      appendSystemPrompt,
-      noSessionPersistence: true,
+    const result = await runLLM({
+      task: "agent_run",
+      prompt: agent.prompt,
+      contextPrompt: appendSystemPrompt,
+      ephemeral: true,
       cwd: join(MUAVIN_DIR, "system"),
       timeoutMs: config.agentTimeoutMs ?? 600000,
       maxTurns: config.agentMaxTurns ?? 100,

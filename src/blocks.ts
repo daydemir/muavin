@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "os";
 import { spawn } from "bun";
 import { embed, getActiveEmbeddingProfileId, supabase, upsertBlockEmbedding } from "./db";
 import { loadConfig } from "./utils";
-import { callClaude } from "./claude";
+import { runLLM } from "./llm";
 
 export type BlockVisibility = "private" | "public";
 export type BlockSource =
@@ -1572,9 +1572,11 @@ async function runBlockProcessor(block: PendingUserBlockRow): Promise<BlockProce
     JSON.stringify(candidates, null, 2),
   ].join("\n");
 
-  const result = await callClaude(prompt, {
+  const result = await runLLM({
+    task: "block_processor",
+    prompt,
     cwd: SYSTEM_CWD,
-    noSessionPersistence: true,
+    ephemeral: true,
     maxTurns: 4,
     timeoutMs: 120_000,
     jsonSchema: BLOCK_PROCESS_SCHEMA,
@@ -1617,9 +1619,11 @@ async function runArtifactProcessor(artifact: PendingArtifactRow): Promise<Artif
     textSnippet || "(none)",
   ].join("\n");
 
-  const result = await callClaude(prompt, {
+  const result = await runLLM({
+    task: "artifact_processor",
+    prompt,
     cwd: SYSTEM_CWD,
-    noSessionPersistence: true,
+    ephemeral: true,
     maxTurns: 4,
     timeoutMs: 180_000,
     jsonSchema: ARTIFACT_PROCESS_SCHEMA,

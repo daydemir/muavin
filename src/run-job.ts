@@ -1,11 +1,11 @@
 import { validateEnv } from "./env";
 import { join } from "path";
-import { callClaude } from "./claude";
 import { cleanupAgents, buildContext, cleanupUploads } from "./agents";
 import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime, formatError, acquireLock, releaseLock, type Config } from "./utils";
 import type { Job } from "./jobs";
 import { buildClarificationDigest, ingestFilesInbox, processPendingState } from "./blocks";
 import { logSystemEvent } from "./events";
+import { runLLM } from "./llm";
 
 validateEnv();
 
@@ -131,11 +131,13 @@ try {
           chatId: config.owner,
           recentCount: config.recentMessageCount ?? 100,
         });
-    const result = await callClaude(fullPrompt, {
-      noSessionPersistence: true,
+    const result = await runLLM({
+      task: "job_prompt",
+      prompt: fullPrompt,
+      contextPrompt: appendSystemPrompt,
+      ephemeral: true,
       maxTurns: config.jobMaxTurns ?? 100,
       timeoutMs: job.timeoutMs ?? config.jobTimeoutMs ?? 600000,
-      appendSystemPrompt,
       model: job.model,
     });
 

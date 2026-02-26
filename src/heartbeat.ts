@@ -9,7 +9,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { sendTelegram } from "./telegram";
 import { listAgents, updateAgent } from "./agents";
-import { callClaude } from "./claude";
+import { runLLM } from "./llm";
 import { MUAVIN_DIR, loadConfig, writeOutbox, isSkipResponse, isPidAlive, formatError } from "./utils";
 import { EMBEDDING_DIMS, EMBEDDING_MODEL } from "./constants";
 
@@ -330,8 +330,10 @@ async function main() {
       .replace("{{HEALTH_RESULTS}}", failures.join("\n"));
 
     try {
-      const result = await callClaude(triagePrompt, {
-        noSessionPersistence: true,
+      const result = await runLLM({
+        task: "heartbeat_triage",
+        prompt: triagePrompt,
+        ephemeral: true,
         maxTurns: 1,
         cwd: systemCwd,
         timeoutMs: 120000,
