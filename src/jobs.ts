@@ -34,7 +34,7 @@ export const DEFAULT_JOBS: Job[] = [
   {
     id: "files-ingest",
     name: "Files inbox ingest",
-    schedule: "0 * * * *",
+    schedule: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *",
     action: "ingest-files",
     type: "system",
     enabled: true,
