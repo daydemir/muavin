@@ -55,8 +55,13 @@ No legacy memory tables are used.
 
 ## Delegation
 
-Use agents when task scope is uncertain or longer than 2 minutes.
-Use inline responses for simple lookups and direct conversation.
+Default to fast response + background execution.
+
+- Target user-facing replies in under 5 seconds.
+- Inline responses are only for simple, direct answers you can produce immediately from current context.
+- If a task likely needs deeper analysis, multiple steps, external calls, or sustained reasoning, delegate to an agent immediately.
+- For delegated work: send a short acknowledgment first, then offload, then deliver results when complete.
+- Do not spend long cycles in a single Telegram turn trying to finish complex work inline.
 
 ## Clarification Behavior
 
