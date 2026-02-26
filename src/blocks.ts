@@ -2,12 +2,23 @@ import { readdir, readFile, stat, mkdir, unlink } from "fs/promises";
 import { join, extname, basename } from "path";
 import { homedir, tmpdir } from "os";
 import { spawn } from "bun";
-import { embed, supabase } from "./db";
+import { embed, getActiveEmbeddingProfileId, supabase, upsertBlockEmbedding } from "./db";
 import { loadConfig } from "./utils";
 import { callClaude } from "./claude";
 
 export type BlockVisibility = "private" | "public";
-export type BlockSource = "cli" | "email" | "apple_note" | "apple_reminder" | "file" | "telegram" | "import" | "mua";
+export type BlockSource =
+  | "chat"
+  | "cli"
+  | "email"
+  | "note"
+  | "reminder"
+  | "file"
+  | "api"
+  | "import"
+  | "system"
+  | "job"
+  | "agent";
 export type BlockScope = "user" | "all";
 
 export interface RelatedBlock {
@@ -17,7 +28,6 @@ export interface RelatedBlock {
   createdAt: string;
   source: string;
   blockKind: string | null;
-  status: string | null;
   lexicalScore: number;
   vectorScore: number;
   score: number;
@@ -55,21 +65,9 @@ interface EntityRow {
   verified: boolean;
 }
 
-interface ProcessingMeta {
-  status?: "pending" | "processing" | "processed" | "error";
-  processor_version?: string;
-  queued_at?: string;
-  started_at?: string;
-  processed_at?: string;
-  attempts?: number;
-  last_error?: string | null;
-  content_hash?: string;
-}
-
 interface ProcessorMuaBlockDraft {
   content: string;
-  block_kind?: "insight" | "followup" | "question" | "interpretation" | "research_note" | "draft" | "note";
-  status?: "proposed" | "queued" | "done" | "resolved" | "dismissed";
+  block_kind?: "note" | "action_open" | "action_closed";
   confidence?: number;
 }
 
@@ -126,6 +124,7 @@ const OPENAI_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL ?? "gp
 const OPENAI_VISION_MODEL = process.env.OPENAI_VISION_MODEL ?? "gpt-4o-mini";
 const SYSTEM_CWD = join(homedir(), ".muavin", "system");
 const PROCESSOR_VERSION = "v1";
+const USER_VERSION_CHECKPOINT_MS = 60_000;
 
 const BLOCK_PROCESS_SCHEMA = {
   type: "object",
@@ -137,8 +136,7 @@ const BLOCK_PROCESS_SCHEMA = {
         type: "object",
         properties: {
           content: { type: "string" },
-          block_kind: { type: "string", enum: ["insight", "followup", "question", "interpretation", "research_note", "draft", "note"] },
-          status: { type: "string", enum: ["proposed", "queued", "done", "resolved", "dismissed"] },
+          block_kind: { type: "string", enum: ["note", "action_open", "action_closed"] },
           confidence: { type: "number" },
         },
         required: ["content"],
@@ -162,8 +160,7 @@ const ARTIFACT_PROCESS_SCHEMA = {
         type: "object",
         properties: {
           content: { type: "string" },
-          block_kind: { type: "string", enum: ["insight", "followup", "question", "interpretation", "research_note", "draft", "note"] },
-          status: { type: "string", enum: ["proposed", "queued", "done", "resolved", "dismissed"] },
+          block_kind: { type: "string", enum: ["note", "action_open", "action_closed"] },
           confidence: { type: "number" },
         },
         required: ["content"],
@@ -246,8 +243,44 @@ function metadataRecord(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
-function processingMetaFrom(metadata: Record<string, unknown>): ProcessingMeta {
-  return metadataRecord(metadata.processing) as ProcessingMeta;
+interface SourceRefEnvelope {
+  [key: string]: unknown;
+  v: number;
+  type: string;
+  id: Record<string, unknown>;
+  extras: Record<string, unknown>;
+}
+
+function sourceRefTypeFor(channel: BlockSource): string {
+  switch (channel) {
+    case "chat":
+      return "telegram_message";
+    case "file":
+      return "artifact";
+    case "cli":
+      return "cli_input";
+    case "job":
+      return "job_run";
+    case "agent":
+      return "agent_run";
+    case "import":
+      return "import_batch";
+    default:
+      return "external_object";
+  }
+}
+
+function normalizeSourceRef(channel: BlockSource, sourceRef?: Record<string, unknown>): SourceRefEnvelope {
+  const input = metadataRecord(sourceRef);
+  const id = metadataRecord(input.id);
+  const extras = metadataRecord(input.extras);
+  const explicitType = typeof input.type === "string" ? input.type : sourceRefTypeFor(channel);
+  return {
+    v: typeof input.v === "number" ? input.v : 1,
+    type: explicitType,
+    id: Object.keys(id).length > 0 ? id : input,
+    extras,
+  };
 }
 
 async function hashText(input: string): Promise<string> {
@@ -255,63 +288,89 @@ async function hashText(input: string): Promise<string> {
   return Buffer.from(digest).toString("hex");
 }
 
-async function withQueuedProcessing(metadata: Record<string, unknown>, content: string): Promise<Record<string, unknown>> {
+async function queueProcessingState(subjectType: "user_block" | "artifact", subjectId: string, inputHash: string): Promise<void> {
   const now = new Date().toISOString();
-  const next: ProcessingMeta = {
-    ...processingMetaFrom(metadata),
-    status: "pending",
-    processor_version: PROCESSOR_VERSION,
-    queued_at: now,
-    last_error: null,
-    content_hash: await hashText(content),
-  };
-  delete (next as Record<string, unknown>).started_at;
-  return {
-    ...metadata,
-    processing: next,
-  };
-}
+  const { data: existing } = await supabase
+    .from("processing_state")
+    .select("state, last_processed_hash")
+    .eq("subject_type", subjectType)
+    .eq("subject_id", subjectId)
+    .maybeSingle();
+  if (existing) {
+    const row = existing as { state: string | null; last_processed_hash: string | null };
+    if (row.state === "processed" && row.last_processed_hash === inputHash) return;
+  }
 
-function withProcessingStarted(metadata: Record<string, unknown>): Record<string, unknown> {
-  const prev = processingMetaFrom(metadata);
-  const attempts = Number.isFinite(prev.attempts) ? Number(prev.attempts) : 0;
-  return {
-    ...metadata,
-    processing: {
-      ...prev,
-      status: "processing",
-      started_at: new Date().toISOString(),
-      attempts: attempts + 1,
+  await supabase
+    .from("processing_state")
+    .upsert({
+      subject_type: subjectType,
+      subject_id: subjectId,
+      input_hash: inputHash,
+      state: "pending",
       last_error: null,
-    } satisfies ProcessingMeta,
-  };
+      updated_at: now,
+    }, { onConflict: "subject_type,subject_id" });
 }
 
-function withProcessingDone(metadata: Record<string, unknown>): Record<string, unknown> {
-  const prev = processingMetaFrom(metadata);
-  return {
-    ...metadata,
-    processing: {
-      ...prev,
-      status: "processed",
-      processor_version: PROCESSOR_VERSION,
-      processed_at: new Date().toISOString(),
-      last_error: null,
-    } satisfies ProcessingMeta,
-  };
+async function appendUserBlockVersion(input: {
+  blockId: string;
+  content: string;
+  source: BlockSource;
+  sourceRef: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  reason: "create" | "autosave" | "finalize";
+}): Promise<void> {
+  const contentHash = await hashText(input.content);
+  const { data: latest } = await supabase
+    .from("user_block_versions")
+    .select("version_no")
+    .eq("block_id", input.blockId)
+    .order("version_no", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const versionNo = latest ? Number((latest as { version_no: number }).version_no) + 1 : 1;
+
+  await supabase.from("user_block_versions").insert({
+    block_id: input.blockId,
+    version_no: versionNo,
+    content: input.content,
+    content_hash: contentHash,
+    source: input.source,
+    source_ref: input.sourceRef,
+    metadata: input.metadata,
+    capture_reason: input.reason,
+  });
 }
 
-function withProcessingError(metadata: Record<string, unknown>, error: string): Record<string, unknown> {
-  const prev = processingMetaFrom(metadata);
-  return {
-    ...metadata,
-    processing: {
-      ...prev,
-      status: "error",
-      processor_version: PROCESSOR_VERSION,
-      last_error: error.slice(0, 1000),
-    } satisfies ProcessingMeta,
-  };
+async function maybeCheckpointUserBlockVersion(input: {
+  blockId: string;
+  content: string;
+  source: BlockSource;
+  sourceRef: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  reason: "autosave" | "finalize";
+}): Promise<void> {
+  const contentHash = await hashText(input.content);
+  const { data: latest } = await supabase
+    .from("user_block_versions")
+    .select("content_hash, captured_at")
+    .eq("block_id", input.blockId)
+    .order("captured_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!latest) {
+    await appendUserBlockVersion({ ...input, reason: "create" });
+    return;
+  }
+
+  const lastHash = String((latest as { content_hash: string }).content_hash);
+  const lastCapturedAt = new Date(String((latest as { captured_at: string }).captured_at)).getTime();
+  if (contentHash === lastHash) return;
+  if (input.reason === "autosave" && (Date.now() - lastCapturedAt) < USER_VERSION_CHECKPOINT_MS) return;
+
+  await appendUserBlockVersion(input);
 }
 
 function normalizeEntityName(name: string): string {
@@ -541,17 +600,14 @@ function extractEmailTarget(content: string): string | null {
 }
 
 async function createMuaQuestionBlock(question: string, context: Record<string, unknown>): Promise<void> {
-  const emb = await embed(question).catch(() => null);
   await supabase.from("mua_blocks").insert({
     content: question,
     visibility: "private",
-    source: "mua",
-    source_ref: {},
+    source: "system",
+    source_ref: normalizeSourceRef("system"),
     metadata: { kind: "clarification", ...context },
-    embedding: emb,
-    block_kind: "question",
+    block_kind: "action_open",
     confidence: 0.5,
-    status: "queued",
   });
 }
 
@@ -645,23 +701,22 @@ export async function createUserBlock(input: {
   const body = parsed.body;
   if (!body) throw new Error("Block content cannot be empty");
 
-  const rawMetadata = {
+  const source = input.source ?? "cli";
+  const sourceRef = normalizeSourceRef(source, input.sourceRef);
+  const metadata = {
     ...parsed.metadata,
     ...(input.metadata ?? {}),
   };
-  const metadata = await withQueuedProcessing(rawMetadata, body);
-
-  const emb = await embed(body).catch(() => null);
+  const inputHash = await hashText(body);
 
   const { data, error } = await supabase
     .from("user_blocks")
     .insert({
       content: body,
       visibility: input.visibility ?? "private",
-      source: input.source ?? "cli",
-      source_ref: input.sourceRef ?? {},
+      source,
+      source_ref: sourceRef,
       metadata,
-      embedding: emb,
     })
     .select("id")
     .single();
@@ -671,6 +726,16 @@ export async function createUserBlock(input: {
   }
 
   const id = (data as { id: string }).id;
+  await appendUserBlockVersion({
+    blockId: id,
+    content: body,
+    source,
+    sourceRef,
+    metadata,
+    reason: "create",
+  }).catch(() => {});
+  await queueProcessingState("user_block", id, inputHash).catch(() => {});
+  await upsertBlockEmbedding({ blockType: "user", blockId: id, text: body }).catch(() => {});
   await maybeQueueEntityDisambiguation(id, body).catch(() => {});
   return { id, content: body, metadata };
 }
@@ -678,8 +743,10 @@ export async function createUserBlock(input: {
 export async function updateUserBlock(input: {
   id: string;
   rawContent: string;
+  source?: BlockSource;
   sourceRef?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  reason?: "autosave" | "finalize";
 }): Promise<BlockInsertResult> {
   const parsed = parseFrontmatter(input.rawContent);
   const body = parsed.body;
@@ -687,29 +754,31 @@ export async function updateUserBlock(input: {
 
   const { data: existingRow, error: existingError } = await supabase
     .from("user_blocks")
-    .select("id, metadata, source_ref")
+    .select("id, metadata, source_ref, source")
     .eq("id", input.id)
     .single();
   if (existingError || !existingRow) {
     throw new Error(`updateUserBlock failed: block ${input.id} not found`);
   }
 
+  const existingSource = String((existingRow as { source?: string }).source ?? "cli") as BlockSource;
+  const source = input.source ?? existingSource;
+  const sourceRef = normalizeSourceRef(source, input.sourceRef ?? metadataRecord((existingRow as { source_ref?: unknown }).source_ref));
   const existingMetadata = metadataRecord((existingRow as { metadata: unknown }).metadata);
-  const mergedMetadata = {
+  const metadata = {
     ...existingMetadata,
     ...parsed.metadata,
     ...(input.metadata ?? {}),
   };
-  const metadata = await withQueuedProcessing(mergedMetadata, body);
-  const emb = await embed(body).catch(() => null);
+  const inputHash = await hashText(body);
 
   const { data, error } = await supabase
     .from("user_blocks")
     .update({
       content: body,
       metadata,
-      source_ref: input.sourceRef ?? metadataRecord((existingRow as { source_ref?: unknown }).source_ref),
-      embedding: emb,
+      source,
+      source_ref: sourceRef,
       updated_at: new Date().toISOString(),
     })
     .eq("id", input.id)
@@ -720,35 +789,58 @@ export async function updateUserBlock(input: {
     throw new Error(`updateUserBlock failed: ${error?.message ?? "unknown error"}`);
   }
 
+  await maybeCheckpointUserBlockVersion({
+    blockId: input.id,
+    content: body,
+    source,
+    sourceRef,
+    metadata,
+    reason: input.reason ?? "autosave",
+  }).catch(() => {});
+  await queueProcessingState("user_block", input.id, inputHash).catch(() => {});
+  await upsertBlockEmbedding({ blockType: "user", blockId: input.id, text: body }).catch(() => {});
   await maybeQueueEntityDisambiguation(input.id, body).catch(() => {});
   return { id: (data as { id: string }).id, content: body, metadata };
 }
 
 export async function createMuaBlock(input: {
   content: string;
-  blockKind?: "note" | "draft" | "insight" | "question" | "followup" | "interpretation" | "research_note";
-  status?: "proposed" | "resolved" | "dismissed" | "queued" | "done";
+  blockKind?: "note" | "action_open" | "action_closed";
   confidence?: number;
   visibility?: BlockVisibility;
   source?: BlockSource;
   sourceRef?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  dedupeKey?: string;
 }): Promise<BlockInsertResult> {
   if (!input.content.trim()) throw new Error("MUA block content cannot be empty");
-  const emb = await embed(input.content).catch(() => null);
+  if (input.dedupeKey) {
+    const { data: existing } = await supabase
+      .from("mua_blocks")
+      .select("id, content, metadata")
+      .eq("dedupe_key", input.dedupeKey)
+      .limit(1)
+      .maybeSingle();
+    if (existing) {
+      const row = existing as { id: string; content: string; metadata: Record<string, unknown> };
+      return { id: row.id, content: row.content, metadata: row.metadata ?? {} };
+    }
+  }
+
+  const source = input.source ?? "system";
+  const sourceRef = normalizeSourceRef(source, input.sourceRef);
 
   const { data, error } = await supabase
     .from("mua_blocks")
     .insert({
       content: input.content,
       block_kind: input.blockKind ?? "note",
-      status: input.status ?? null,
       confidence: input.confidence ?? null,
       visibility: input.visibility ?? "private",
-      source: input.source ?? "mua",
-      source_ref: input.sourceRef ?? {},
+      source,
+      source_ref: sourceRef,
       metadata: input.metadata ?? {},
-      embedding: emb,
+      dedupe_key: input.dedupeKey ?? null,
     })
     .select("id")
     .single();
@@ -757,7 +849,9 @@ export async function createMuaBlock(input: {
     throw new Error(`createMuaBlock failed: ${error?.message ?? "unknown error"}`);
   }
 
-  return { id: (data as { id: string }).id, content: input.content, metadata: input.metadata ?? {} };
+  const id = (data as { id: string }).id;
+  await upsertBlockEmbedding({ blockType: "mua", blockId: id, text: input.content }).catch(() => {});
+  return { id, content: input.content, metadata: input.metadata ?? {} };
 }
 
 export async function searchRelatedBlocks(input: {
@@ -777,8 +871,7 @@ export async function searchRelatedBlocks(input: {
   if (queryTokens.length > 0) {
     let lexicalQuery = supabase
       .from("all_blocks_v")
-      .select("id, author_type, content, created_at, source, block_kind, status")
-      .is("archived_at", null)
+      .select("id, author_type, content, created_at, source, block_kind")
       .order("created_at", { ascending: false })
       .limit(limit * 8);
 
@@ -803,7 +896,6 @@ export async function searchRelatedBlocks(input: {
         createdAt: String(row.created_at),
         source: String(row.source ?? ""),
         blockKind: row.block_kind ? String(row.block_kind) : null,
-        status: row.status ? String(row.status) : null,
         lexicalScore: Math.min(score, 1),
         vectorScore: 0,
         score: Math.min(score, 1),
@@ -814,8 +906,10 @@ export async function searchRelatedBlocks(input: {
   const vectorMap = new Map<string, RelatedBlock>();
   try {
     const emb = await embed(input.query);
+    const profileId = await getActiveEmbeddingProfileId();
     const { data } = await supabase.rpc("search_all_blocks", {
       query_embedding: emb,
+      profile_id: profileId,
       include_user: includeUser,
       include_mua: includeMua,
       match_threshold: 0.68,
@@ -831,7 +925,6 @@ export async function searchRelatedBlocks(input: {
         createdAt: String(row.created_at),
         source: String(row.source ?? ""),
         blockKind: row.block_kind ? String(row.block_kind) : null,
-        status: row.status ? String(row.status) : null,
         lexicalScore: 0,
         vectorScore: Number(row.similarity ?? 0),
         score: Number(row.similarity ?? 0),
@@ -887,7 +980,7 @@ export async function buildClarificationDigest(limit = 20): Promise<string | nul
 
   const lines: string[] = [
     "overnight clarification digest",
-    "reply with /clarify <id> <option-number>",
+    "answer in CLI: bun muavin clarify answer --id <id> --option <number>",
     "",
   ];
 
@@ -1189,6 +1282,80 @@ async function walkFiles(dir: string): Promise<string[]> {
   return out;
 }
 
+export async function ingestFileArtifactFromPath(input: {
+  filePath: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+  sourceType?: "file";
+}): Promise<{ artifactId: string; created: boolean; checksum: string; objectKey: string | null; textContent: string | null }> {
+  const filePath = input.filePath;
+  const st = await stat(filePath);
+  if (st.size === 0) {
+    throw new Error("cannot ingest empty file");
+  }
+
+  getR2Config();
+  if (!(await commandExists("aws"))) {
+    throw new Error("aws CLI is required for R2 uploads");
+  }
+
+  const checksum = await computeSha256(filePath);
+  const { data: existing } = await supabase
+    .from("artifacts")
+    .select("id, text_content, object_key")
+    .eq("source_type", input.sourceType ?? "file")
+    .eq("checksum", checksum)
+    .limit(1);
+
+  if (existing && existing.length > 0) {
+    const row = existing[0] as { id: string; text_content: string | null; object_key: string | null };
+    const inputHash = await hashText(`${checksum}:${row.text_content ?? ""}`);
+    await queueProcessingState("artifact", row.id, inputHash).catch(() => {});
+    return {
+      artifactId: row.id,
+      created: false,
+      checksum,
+      objectKey: row.object_key ?? null,
+      textContent: row.text_content ?? null,
+    };
+  }
+
+  const mimeType = fileMimeType(filePath);
+  const objectKey = await uploadToR2(filePath);
+  const textContent = await extractTextForFile(filePath, mimeType);
+  const artifactMetadata = {
+    ...(input.metadata ?? {}),
+    local_path: filePath,
+    size_bytes: st.size,
+    extension: extname(filePath).toLowerCase(),
+    uploaded_to_r2: true,
+  };
+
+  const { data: artifact, error: artifactError } = await supabase
+    .from("artifacts")
+    .insert({
+      source_type: input.sourceType ?? "file",
+      title: input.title ?? basename(filePath),
+      mime_type: mimeType,
+      text_content: textContent,
+      object_key: objectKey,
+      checksum,
+      metadata: artifactMetadata,
+      ingest_status: "parsed",
+    })
+    .select("id")
+    .single();
+
+  if (artifactError || !artifact) {
+    throw new Error(`artifact insert failed: ${artifactError?.message ?? "unknown error"}`);
+  }
+
+  const artifactId = (artifact as { id: string }).id;
+  const inputHash = await hashText(`${checksum}:${textContent ?? ""}`);
+  await queueProcessingState("artifact", artifactId, inputHash).catch(() => {});
+  return { artifactId, created: true, checksum, objectKey, textContent };
+}
+
 export async function ingestFilesInbox(): Promise<{ scanned: number; ingested: number; skipped: number; errored: number }> {
   const config = await loadConfig();
   const inboxDir = (typeof config.filesInboxDir === "string" && config.filesInboxDir.length > 0)
@@ -1209,63 +1376,9 @@ export async function ingestFilesInbox(): Promise<{ scanned: number; ingested: n
 
   for (const filePath of files) {
     try {
-      const st = await stat(filePath);
-      if (st.size === 0) {
-        skipped++;
-        continue;
-      }
-
-      const checksum = await computeSha256(filePath);
-      const { data: existing } = await supabase
-        .from("artifacts")
-        .select("id")
-        .eq("source_type", "file")
-        .eq("checksum", checksum)
-        .limit(1);
-
-      if (existing && existing.length > 0) {
-        skipped++;
-        continue;
-      }
-
-      const mimeType = fileMimeType(filePath);
-      const objectKey = await uploadToR2(filePath);
-      const textContent = await extractTextForFile(filePath, mimeType);
-      const artifactMetadata = {
-        local_path: filePath,
-        size_bytes: st.size,
-        extension: extname(filePath).toLowerCase(),
-        uploaded_to_r2: true,
-        processing: {
-          status: "pending",
-          processor_version: PROCESSOR_VERSION,
-          queued_at: new Date().toISOString(),
-          last_error: null,
-          content_hash: textContent ? await hashText(textContent) : undefined,
-        } satisfies ProcessingMeta,
-      };
-
-      const { data: artifact, error: artifactError } = await supabase
-        .from("artifacts")
-        .insert({
-          source_type: "file",
-          title: basename(filePath),
-          mime_type: mimeType,
-          text_content: textContent,
-          object_key: objectKey,
-          checksum,
-          metadata: artifactMetadata,
-          ingest_status: "parsed",
-        })
-        .select("id")
-        .single();
-
-      if (artifactError || !artifact) {
-        errored++;
-        continue;
-      }
-
-      ingested++;
+      const result = await ingestFileArtifactFromPath({ filePath, sourceType: "file" });
+      if (result.created) ingested++;
+      else skipped++;
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       try {
@@ -1294,6 +1407,7 @@ interface PendingUserBlockRow {
   created_at: string;
   updated_at: string;
   metadata: Record<string, unknown>;
+  input_hash: string;
 }
 
 interface PendingArtifactRow {
@@ -1305,6 +1419,7 @@ interface PendingArtifactRow {
   object_key: string | null;
   metadata: Record<string, unknown>;
   ingest_status: string;
+  input_hash: string;
 }
 
 function parseStructuredOutput<T>(raw: unknown): T | null {
@@ -1333,7 +1448,6 @@ function sanitizeProcessorBlocks(input: ProcessorMuaBlockDraft[]): ProcessorMuaB
     out.push({
       content: content.slice(0, 3000),
       block_kind: row.block_kind ?? "note",
-      status: row.status ?? "proposed",
       confidence: clampConfidence(row.confidence, 0.65),
     });
     if (out.length >= 6) break;
@@ -1342,42 +1456,56 @@ function sanitizeProcessorBlocks(input: ProcessorMuaBlockDraft[]): ProcessorMuaB
 }
 
 async function getPendingUserBlocks(limit: number): Promise<PendingUserBlockRow[]> {
-  const fetchLimit = Math.max(limit * 8, 200);
+  const { data: queueRows } = await supabase
+    .from("processing_state")
+    .select("subject_id, input_hash")
+    .eq("subject_type", "user_block")
+    .in("state", ["pending", "error"])
+    .order("updated_at", { ascending: true })
+    .limit(limit);
+  if (!queueRows || queueRows.length === 0) return [];
+
+  const ids = queueRows.map((q) => String((q as { subject_id: string }).subject_id));
+  const hashById = new Map<string, string>(
+    queueRows.map((q) => [String((q as { subject_id: string }).subject_id), String((q as { input_hash: string }).input_hash)]),
+  );
+
   const { data, error } = await supabase
     .from("user_blocks")
     .select("id, content, source, created_at, updated_at, metadata")
-    .is("archived_at", null)
-    .order("updated_at", { ascending: true })
-    .limit(fetchLimit);
+    .in("id", ids);
   if (error || !data) return [];
 
-  const rows = (data as Array<Record<string, unknown>>).map((row) => ({
+  return (data as Array<Record<string, unknown>>).map((row) => ({
     id: String(row.id),
     content: String(row.content ?? ""),
     source: String(row.source ?? ""),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
     metadata: metadataRecord(row.metadata),
+    input_hash: hashById.get(String(row.id)) ?? "",
   }));
-
-  const pending: PendingUserBlockRow[] = [];
-  for (const row of rows) {
-    const status = processingMetaFrom(row.metadata).status ?? "pending";
-    if (status === "pending" || status === "processing") {
-      pending.push(row);
-      if (pending.length >= limit) break;
-    }
-  }
-  return pending;
 }
 
 async function getPendingArtifacts(limit: number): Promise<PendingArtifactRow[]> {
+  const { data: queueRows } = await supabase
+    .from("processing_state")
+    .select("subject_id, input_hash")
+    .eq("subject_type", "artifact")
+    .in("state", ["pending", "error"])
+    .order("updated_at", { ascending: true })
+    .limit(limit);
+  if (!queueRows || queueRows.length === 0) return [];
+
+  const ids = queueRows.map((q) => String((q as { subject_id: string }).subject_id));
+  const hashById = new Map<string, string>(
+    queueRows.map((q) => [String((q as { subject_id: string }).subject_id), String((q as { input_hash: string }).input_hash)]),
+  );
+
   const { data, error } = await supabase
     .from("artifacts")
     .select("id, source_type, title, mime_type, text_content, object_key, metadata, ingest_status")
-    .in("ingest_status", ["parsed"])
-    .order("updated_at", { ascending: true })
-    .limit(limit);
+    .in("id", ids);
   if (error || !data) return [];
 
   return (data as Array<Record<string, unknown>>).map((row) => ({
@@ -1389,6 +1517,7 @@ async function getPendingArtifacts(limit: number): Promise<PendingArtifactRow[]>
     object_key: row.object_key ? String(row.object_key) : null,
     metadata: metadataRecord(row.metadata),
     ingest_status: String(row.ingest_status ?? "parsed"),
+    input_hash: hashById.get(String(row.id)) ?? "",
   }));
 }
 
@@ -1402,7 +1531,6 @@ function blockCandidateRows(rows: RelatedBlock[], selfId: string): Array<Record<
       score: Number(r.score.toFixed(3)),
       content_preview: truncateForPrompt(r.content, 420),
       block_kind: r.blockKind,
-      status: r.status,
     }));
 }
 
@@ -1425,7 +1553,8 @@ async function runBlockProcessor(block: PendingUserBlockRow): Promise<BlockProce
     "",
     "Rules:",
     "- Keep analysis factual and concise.",
-    "- `mua_blocks` should be atomic, useful follow-ups/insights/questions (0-5 items).",
+    "- `mua_blocks` should be atomic and useful (0-5 items).",
+    "- Use `block_kind`=`action_open` for unresolved next steps/questions, `action_closed` for explicitly completed outcomes, otherwise `note`.",
     "- `related_block_ids` must only use ids from candidate_related_blocks.",
     "- `entity_names` should only include likely people (proper names), not generic nouns.",
     "- Do not repeat the user block verbatim.",
@@ -1469,7 +1598,8 @@ async function runArtifactProcessor(artifact: PendingArtifactRow): Promise<Artif
     "",
     "Rules:",
     "- `description` should summarize what the file is (1-2 sentences).",
-    "- `mua_blocks` should be atomic insights/questions/followups extracted from the artifact (0-6 items).",
+    "- `mua_blocks` should be atomic notes/actions extracted from the artifact (0-6 items).",
+    "- Use `block_kind`=`action_open` for unresolved next steps/questions, `action_closed` for explicitly completed outcomes, otherwise `note`.",
     "- `entity_names` should only include likely people (proper names).",
     "",
     "artifact:",
@@ -1512,13 +1642,20 @@ async function createProcessorMuaBlocks(input: {
 }): Promise<number> {
   let created = 0;
   for (const draft of input.drafts) {
+    const dedupeKey = await hashText(
+      `${input.derivedFrom.type}:${input.derivedFrom.id}:${PROCESSOR_VERSION}:${draft.block_kind ?? "note"}:${normalizeWhitespace(draft.content)}`,
+    );
     const block = await createMuaBlock({
       content: draft.content,
       blockKind: draft.block_kind ?? "note",
-      status: draft.status ?? "proposed",
       confidence: clampConfidence(draft.confidence, 0.65),
-      source: "mua",
+      source: "system",
+      sourceRef: normalizeSourceRef("system", {
+        type: input.derivedFrom.type === "user_block" ? "processor_user_block" : "processor_artifact",
+        id: { subject_id: input.derivedFrom.id, processor_version: PROCESSOR_VERSION },
+      }),
       metadata: input.metadata,
+      dedupeKey,
     });
     created++;
 
@@ -1559,15 +1696,55 @@ async function createProcessorMuaBlocks(input: {
   return created;
 }
 
-async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean; createdMuaBlocks: number }> {
-  const startedMetadata = withProcessingStarted(row.metadata);
+async function markProcessingStarted(subjectType: "user_block" | "artifact", subjectId: string): Promise<void> {
+  const { data: existing } = await supabase
+    .from("processing_state")
+    .select("attempts")
+    .eq("subject_type", subjectType)
+    .eq("subject_id", subjectId)
+    .maybeSingle();
+  const attempts = Number((existing as { attempts?: number } | null)?.attempts ?? 0) + 1;
+
   await supabase
-    .from("user_blocks")
+    .from("processing_state")
     .update({
-      metadata: startedMetadata,
+      state: "processing",
+      attempts,
+      last_error: null,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", row.id);
+    .eq("subject_type", subjectType)
+    .eq("subject_id", subjectId);
+}
+
+async function markProcessingDone(subjectType: "user_block" | "artifact", subjectId: string, inputHash: string): Promise<void> {
+  await supabase
+    .from("processing_state")
+    .update({
+      state: "processed",
+      last_processed_hash: inputHash,
+      last_error: null,
+      processed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("subject_type", subjectType)
+    .eq("subject_id", subjectId);
+}
+
+async function markProcessingError(subjectType: "user_block" | "artifact", subjectId: string, error: string): Promise<void> {
+  await supabase
+    .from("processing_state")
+    .update({
+      state: "error",
+      last_error: error.slice(0, 1000),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("subject_type", subjectType)
+    .eq("subject_id", subjectId);
+}
+
+async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean; createdMuaBlocks: number }> {
+  await markProcessingStarted("user_block", row.id);
 
   try {
     const output = await runBlockProcessor(row);
@@ -1615,38 +1792,18 @@ async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean
       entityIds,
     });
 
-    const processedMetadata = withProcessingDone(startedMetadata);
-    await supabase
-      .from("user_blocks")
-      .update({
-        metadata: processedMetadata,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", row.id);
+    await markProcessingDone("user_block", row.id, row.input_hash);
 
     return { ok: true, createdMuaBlocks };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await supabase
-      .from("user_blocks")
-      .update({
-        metadata: withProcessingError(startedMetadata, message),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", row.id);
+    await markProcessingError("user_block", row.id, message);
     return { ok: false, createdMuaBlocks: 0 };
   }
 }
 
 async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; createdMuaBlocks: number }> {
-  const startedMetadata = withProcessingStarted(row.metadata);
-  await supabase
-    .from("artifacts")
-    .update({
-      metadata: startedMetadata,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", row.id);
+  await markProcessingStarted("artifact", row.id);
 
   try {
     const output = await runArtifactProcessor(row);
@@ -1671,8 +1828,7 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
           drafts: [
             {
               content: output.description,
-              block_kind: "interpretation",
-              status: "proposed",
+              block_kind: "note",
               confidence: 0.8,
             },
           ],
@@ -1698,11 +1854,11 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
       entityIds,
     });
 
-    const updatedMetadata = withProcessingDone({
-      ...startedMetadata,
+    const updatedMetadata = {
+      ...row.metadata,
       file_description: output.description || null,
       topics: output.description ? toTopicTokens(output.description) : [],
-    });
+    };
 
     await supabase
       .from("artifacts")
@@ -1713,6 +1869,7 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
         error: null,
       })
       .eq("id", row.id);
+    await markProcessingDone("artifact", row.id, row.input_hash);
 
     return { ok: true, createdMuaBlocks: createdDescription + createdInsights };
   } catch (error) {
@@ -1720,12 +1877,12 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
     await supabase
       .from("artifacts")
       .update({
-        metadata: withProcessingError(startedMetadata, message),
         ingest_status: "error",
         error: message.slice(0, 1000),
         updated_at: new Date().toISOString(),
       })
       .eq("id", row.id);
+    await markProcessingError("artifact", row.id, message);
     return { ok: false, createdMuaBlocks: 0 };
   }
 }
@@ -1786,8 +1943,7 @@ async function fetchBlocksByIds(authorType: "user" | "mua", ids: string[]): Prom
     const { data } = await supabase
       .from(table)
       .select("id, created_at, content, source")
-      .in("id", part)
-      .is("archived_at", null);
+      .in("id", part);
 
     for (const row of (data ?? []) as Array<Record<string, unknown>>) {
       out.set(String(row.id), {
@@ -1888,8 +2044,7 @@ export async function getCrmSummary(input?: {
         .from("mua_blocks")
         .select("id")
         .in("id", openLoopIds)
-        .in("status", ["proposed", "queued"])
-        .in("block_kind", ["followup", "question", "draft"]);
+        .eq("block_kind", "action_open");
       openLoops = loops?.length ?? 0;
     }
 

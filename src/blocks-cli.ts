@@ -156,7 +156,7 @@ async function showRelated(query: string, scope: BlockScope, page: number, pageS
     const typeTag = r.authorType === "user" ? pc.cyan("user") : pc.magenta("mua");
     const score = r.score.toFixed(2);
     console.log(`${rank}. [${typeTag}] [${r.source}] score=${score}`);
-    if (r.blockKind) dim(`   kind=${r.blockKind}${r.status ? ` status=${r.status}` : ""}`);
+    if (r.blockKind) dim(`   kind=${r.blockKind}`);
     console.log(`   ${truncate(r.content, 180)}`);
   });
   console.log();
