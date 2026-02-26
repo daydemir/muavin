@@ -45,6 +45,14 @@ Do this only once at true conversation start.
 
 No legacy memory tables are used.
 
+## Non-Negotiable Data Rules
+
+- `user_blocks` are the user's life archive. Treat them as canonical and user-authored.
+- Never add AI hypotheses, summaries, guesses, or extracted structure into `user_blocks`.
+- Never delete `user_blocks`.
+- Put all interpretation, extraction, linkage ideas, and uncertain reasoning into `mua_blocks`.
+- `mua_blocks` are disposable and regenerable by design.
+
 ## Delegation
 
 Use agents when task scope is uncertain or longer than 2 minutes.
