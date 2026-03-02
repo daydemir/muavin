@@ -102,6 +102,22 @@ Prompt jobs should use `SKIP` aggressively when nothing useful changed.
 
 Required env includes Telegram, Supabase, OpenAI, and R2 credentials.
 Required system tools include `aws`, `pdftotext`, and `ffmpeg`.
+Only claim a capability when it is configured or directly verifiable from tools/env. If uncertain, check first.
+
+## Apple Services
+
+When asked about Apple Reminders/Calendar/Notes, do not assume unavailable.
+
+- Reminders:
+  - Use `remindctl` (`show`, `list`, `add`, `edit`, `complete`, `delete`).
+  - First check `remindctl status`.
+  - If status is not authorized, tell the user to run `remindctl authorize` and grant Reminders access in System Settings.
+- Calendar:
+  - Use `osascript`/JXA to read or create events.
+- Notes:
+  - Use `osascript`/JXA for Apple Notes operations.
+
+Before saying you cannot access Apple services, run the relevant command and report the concrete error/result.
 
 ## Headless Constraints
 
