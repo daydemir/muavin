@@ -169,6 +169,10 @@ async function setupCommand() {
 
   // Step 3: Setup Supabase (or skip if already configured)
   let supabase = await checkExistingSupabase(existingEnv);
+  if (supabase && existingEnv.SUPABASE_URL !== supabase.url) {
+    await updateEnvFile({ SUPABASE_URL: supabase.url, SUPABASE_SERVICE_KEY: supabase.key });
+    ok("Normalized Supabase URL in .env\n");
+  }
   if (!supabase) {
     supabase = await setupSupabase();
     if (!supabase) return;
@@ -326,8 +330,28 @@ async function checkExistingOpenAI(
 }
 
 function extractSupabaseProjectRef(url: string): string | null {
-  const match = url.match(/https:\/\/([^.]+)\.supabase\.co/);
-  return match?.[1] ?? null;
+  const projectUrl = url.match(/https:\/\/([^.]+)\.supabase\.co/i);
+  if (projectUrl?.[1]) return projectUrl[1];
+  const dashboardUrl = url.match(/https:\/\/supabase\.com\/dashboard\/project\/([a-z0-9-]+)/i);
+  return dashboardUrl?.[1] ?? null;
+}
+
+function normalizeSupabaseProjectUrl(input: string): string | null {
+  const raw = input.trim();
+  if (!raw) return null;
+  const projectRef = extractSupabaseProjectRef(raw);
+  if (!projectRef) return null;
+  return `https://${projectRef}.supabase.co`;
+}
+
+function formatSupabaseConnectionError(message: string): string {
+  const msg = String(message ?? "");
+  if (!msg) return "Unknown Supabase connection error";
+  if (msg.includes("<!DOCTYPE html") || msg.includes("<html")) {
+    return "Received HTML instead of API response (likely wrong SUPABASE_URL). Use https://<project-ref>.supabase.co";
+  }
+  if (msg.length > 240) return `${msg.slice(0, 240)}...`;
+  return msg;
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -388,10 +412,15 @@ async function promptSupabaseSchemaRun(projectRef: string): Promise<void> {
 async function checkExistingSupabase(
   existingEnv: Record<string, string>
 ): Promise<{ url: string; key: string } | null> {
-  const url = existingEnv.SUPABASE_URL;
+  const inputUrl = existingEnv.SUPABASE_URL;
   const key = existingEnv.SUPABASE_SERVICE_KEY;
 
-  if (!url || !key) {
+  if (!inputUrl || !key) {
+    return null;
+  }
+  const url = normalizeSupabaseProjectUrl(inputUrl);
+  if (!url) {
+    warn("Existing Supabase URL is invalid, re-configuring...\n");
     return null;
   }
 
@@ -420,7 +449,7 @@ async function checkExistingSupabase(
       ok("Supabase connection verified\n");
       return { url, key };
     } else if (error) {
-      warn("Supabase credentials exist but connection failed, re-configuring...\n");
+      warn(`Supabase credentials exist but connection failed: ${formatSupabaseConnectionError(error.message)}\n`);
       return null;
     }
 
@@ -627,11 +656,23 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
   dim("1. Go to your Supabase project dashboard");
   dim("2. Settings → API → Project API keys");
   dim("3. Copy the 'service_role' key (the secret one, NOT anon)\n");
+  dim("Project URL can be either:");
+  dim("- https://<project-ref>.supabase.co");
+  dim("- https://supabase.com/dashboard/project/<project-ref>/...\n");
 
-  const url = prompt("Enter your Supabase project URL (e.g., https://xxxx.supabase.co): ");
-  if (!url) {
+  const rawUrl = prompt("Enter your Supabase project URL (or dashboard URL): ");
+  if (!rawUrl) {
     fail("No URL provided");
     return null;
+  }
+  const url = normalizeSupabaseProjectUrl(rawUrl);
+  if (!url) {
+    fail("Invalid Supabase URL. Expected https://<project-ref>.supabase.co or Supabase dashboard project URL.");
+    warn("Run setup again and paste the project URL format shown above.");
+    return null;
+  }
+  if (rawUrl.trim() !== url) {
+    ok(`Using normalized project URL: ${url}`);
   }
 
   const key = prompt("Enter your Supabase service_role key: ");
@@ -663,7 +704,8 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
         return null;
       }
     } else if (error) {
-      fail(`Supabase connection error: ${error.message}`);
+      fail(`Supabase connection error: ${formatSupabaseConnectionError(error.message)}`);
+      warn("Check SUPABASE_URL format and service_role key, then run setup again.");
       return null;
     }
 
