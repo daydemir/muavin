@@ -57,7 +57,18 @@ async function checkRelayDaemon(): Promise<string | null> {
 async function checkRelayLock(): Promise<string | null> {
   const lockPath = join(MUAVIN_DIR, "relay.lock");
   try {
-    const pid = parseInt(await readFile(lockPath, "utf-8"));
+    const raw = (await readFile(lockPath, "utf-8")).trim();
+    let pid: number | null = null;
+    try {
+      const parsed = JSON.parse(raw) as { pid?: unknown };
+      if (typeof parsed?.pid === "number" && Number.isFinite(parsed.pid)) {
+        pid = parsed.pid;
+      }
+    } catch {
+      const maybePid = Number.parseInt(raw, 10);
+      if (Number.isFinite(maybePid)) pid = maybePid;
+    }
+    if (pid == null) return null;
     if (isPidAlive(pid)) {
       return null;
     }
@@ -303,12 +314,12 @@ async function main() {
     if (failures[i].includes("Relay daemon not running") || failures[i].includes("Relay lock stale")) {
       const outcome = await tryRestartDaemon("ai.muavin.relay", state);
       console.log(outcome);
-      failures[i] = outcome;
+      failures[i] = outcome.includes("restarted successfully") ? "" : outcome;
     } else if (failures[i].includes("Missing job plists")) {
       try {
         const { syncJobPlists } = await import("./jobs");
         await syncJobPlists();
-        failures[i] = "Job plists re-synced";
+        failures[i] = "";
         console.log("Job plists re-synced");
       } catch (e) {
         failures[i] = `Job plist sync failed: ${formatError(e)}`;
@@ -316,10 +327,12 @@ async function main() {
     }
   }
 
-  if (failures.length === 0) {
+  const activeFailures = failures.filter(Boolean);
+
+  if (activeFailures.length === 0) {
     console.log("Heartbeat OK");
   } else {
-    for (const f of failures) {
+    for (const f of activeFailures) {
       console.error(`FAIL: ${f}`);
     }
 
@@ -327,7 +340,7 @@ async function main() {
     const promptsDir = join(MUAVIN_DIR, "prompts");
     const systemCwd = join(MUAVIN_DIR, "system");
     const triagePrompt = readFileSync(join(promptsDir, "heartbeat-triage.md"), "utf-8")
-      .replace("{{HEALTH_RESULTS}}", failures.join("\n"));
+      .replace("{{HEALTH_RESULTS}}", activeFailures.join("\n"));
 
     try {
       const result = await runLLM({
@@ -342,13 +355,13 @@ async function main() {
       if (isSkipResponse(result.text)) {
         console.log("AI triage: SKIP (not worth alerting)");
       } else {
-        const failuresHash = [...failures].sort().join("|");
+        const failuresHash = [...activeFailures].sort().join("|");
         const isDuplicate = failuresHash === state.lastFailuresHash &&
           (Date.now() - state.lastAlertAt) < 2 * 60 * 60_000;
 
         if (!isDuplicate) {
           const config = await loadConfig();
-          const relayDown = failures.some(f => f.includes("Relay daemon not running") || f.includes("Relay lock stale"));
+          const relayDown = activeFailures.some(f => f.includes("Relay daemon not running") || f.includes("Relay lock stale"));
 
           if (relayDown) {
             // Relay is down — send directly via Telegram
@@ -375,7 +388,7 @@ async function main() {
     } catch (e) {
       // Fallback to direct alert if Claude fails
       console.error("AI triage failed, sending raw alert:", e);
-      const alertText = `Muavin Heartbeat Alert\n\n${failures.map(f => `- ${f}`).join("\n")}`;
+      const alertText = `Muavin Heartbeat Alert\n\n${activeFailures.map(f => `- ${f}`).join("\n")}`;
       const config = await loadConfig();
       // Always send directly on triage failure (can't trust outbox if things are broken)
       await sendTelegram(config.owner, alertText);
