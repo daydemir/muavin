@@ -396,18 +396,16 @@ async function promptSupabaseDbUrl(projectRef: string): Promise<string | null> {
   dim("- Supabase Dashboard → Project Settings → Database");
   dim("- DB password: 'Connection info' section (reset if unknown)");
   dim("- Postgres URL: 'Connection string' section (URI format)\n");
-  dim("Choose one input method:");
-  dim("- DB password (recommended): simplest; Muavin builds the standard direct Postgres URL for this project.");
-  dim("- Full Postgres URL: use if you already manage/customize the exact URI yourself.\n");
-  const enable = prompt("Configure direct DB connection now? (y/n): ");
-  if (enable?.toLowerCase() !== "y") return null;
+  dim("Pick an option:");
+  dim("- 1 = DB password (recommended; Muavin builds the URL)");
+  dim("- 2 = Full Postgres URL");
+  dim("- Enter = skip direct DB setup for now");
+  dim(`Built URL format for option 1: postgresql://postgres:<password>@db.${projectRef}.supabase.co:5432/postgres?sslmode=require\n`);
 
-  dim("Input options:");
-  dim("- Full Postgres URL");
-  dim(`- DB password only (builds: postgresql://postgres:<password>@db.${projectRef}.supabase.co:5432/postgres?sslmode=require)\n`);
+  const mode = prompt("DB connection mode [1/2] (Enter to skip): ")?.trim();
+  if (!mode) return null;
 
-  const method = prompt("Use full Postgres URL? (y/n): ");
-  if (method?.toLowerCase() === "y") {
+  if (mode === "2") {
     const rawDbUrl = prompt("Enter Postgres URL: ");
     if (!rawDbUrl) {
       fail("No Postgres URL provided");
@@ -419,6 +417,10 @@ async function promptSupabaseDbUrl(projectRef: string): Promise<string | null> {
       return null;
     }
     return normalized;
+  }
+  if (mode !== "1") {
+    fail("Invalid choice. Enter 1, 2, or press Enter to skip.");
+    return null;
   }
 
   const password = prompt("Enter Supabase DB password (postgres user): ");
