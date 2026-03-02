@@ -255,18 +255,20 @@ export async function buildContext(opts: {
     parts.push(`[System Warning] ${missing} failed — you are responding without full context.`);
   }
 
-  if (contextResults.length > 0) {
-    const contextStr = contextResults
-      .map((r) => `[${r.source}] ${r.content}`)
-      .join("\n");
-    parts.push(`[Relevant Blocks]\n${contextStr}`);
-  }
+  const contextStr = contextResults.length > 0
+    ? contextResults.map((r) => `[${r.source}] ${r.content}`).join("\n")
+    : "";
+  const recentStr = recent.length > 0
+    ? recent.map((m) => `${m.role}: ${m.content}`).join("\n")
+    : "";
 
-  if (recent.length > 0) {
-    const recentStr = recent
-      .map((m) => `${m.role}: ${m.content}`)
-      .join("\n");
-    parts.push(`[Recent Conversation]\n${recentStr}`);
+  // For conductor flows, prioritize explicit recent chat turns over semantic retrieval.
+  if (role === "conductor") {
+    if (recentStr) parts.push(`[Recent Conversation]\n${recentStr}`);
+    if (contextStr) parts.push(`[Relevant Blocks]\n${contextStr}`);
+  } else {
+    if (contextStr) parts.push(`[Relevant Blocks]\n${contextStr}`);
+    if (recentStr) parts.push(`[Recent Conversation]\n${recentStr}`);
   }
 
   // 4. Agent summary (voice only)

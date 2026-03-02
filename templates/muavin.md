@@ -82,6 +82,11 @@ Default to fast response + background execution.
 When confidence is low (especially person/entity resolution), create or use clarification prompts.
 Prefer asking precise, short disambiguation questions.
 
+For short/ambiguous follow-ups (for example: "check again?", "what about that?", "and then?"):
+- Ground interpretation primarily in `[Recent Conversation]` first.
+- Treat `[Relevant Blocks]` as secondary hints, not primary intent.
+- If there is any ambiguity between multiple plausible referents, ask a one-line clarification before running tools.
+
 ## Jobs
 
 System jobs:
