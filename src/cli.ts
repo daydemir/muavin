@@ -185,6 +185,9 @@ async function setupCommand() {
     openaiKey = await setupOpenAI();
     if (!openaiKey) return;
     await updateEnvFile({ OPENAI_API_KEY: openaiKey });
+  } else if (!existingEnv.OPENAI_API_KEY) {
+    await updateEnvFile({ OPENAI_API_KEY: openaiKey });
+    ok("Saved OpenAI key to .env");
   }
   process.env.OPENAI_API_KEY = openaiKey;
 
@@ -257,7 +260,7 @@ async function parseEnvFile(envPath: string): Promise<Record<string, string>> {
     const content = await file.text();
     const env: Record<string, string> = {};
     for (const line of content.split("\n")) {
-      const match = line.match(/^([A-Z_]+)=(.*)$/);
+      const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
       if (match) {
         env[match[1]] = match[2];
       }
@@ -770,7 +773,7 @@ async function updateEnvFile(updates: Record<string, string>) {
   const foundKeys = new Set<string>();
 
   const updatedLines = lines.map((line) => {
-    const match = line.match(/^([A-Z_]+)=/);
+    const match = line.match(/^([A-Z0-9_]+)=/);
     if (match && match[1] in updates) {
       foundKeys.add(match[1]);
       return `${match[1]}=${updates[match[1]]}`;
