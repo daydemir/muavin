@@ -393,9 +393,8 @@ async function promptSupabaseDbUrl(projectRef: string): Promise<string | null> {
   console.log();
   dim("Optional: configure direct DB connection for automatic schema setup and future migrations.");
   dim("Where to get credentials:");
-  dim("- Supabase Dashboard → Project Settings → Database");
-  dim("- DB password: 'Connection info' section (reset if unknown)");
-  dim("- Postgres URL: 'Connection string' section (URI format)\n");
+  dim("- Postgres URL: Dashboard top bar → Connect → choose URI format");
+  dim("- DB password: Project Settings → Database (reset if unknown)\n");
   dim("Pick an option:");
   dim("- 1 = DB password (recommended; Muavin builds the URL)");
   dim("- 2 = Full Postgres URL");
@@ -776,8 +775,8 @@ async function setupSupabase(): Promise<{ url: string; key: string; dbUrl?: stri
   dim("2. Project Settings → API → Project API keys");
   dim("3. Copy the 'service_role' key (the secret one, NOT anon)\n");
   dim("Optional for automatic schema/migrations:");
-  dim("4. Project Settings → Database");
-  dim("5. Either copy the DB password or copy a full Postgres connection string\n");
+  dim("4. For full Postgres URL: use top-bar Connect and copy URI connection string");
+  dim("5. For DB password: Project Settings → Database (reset if unknown)\n");
   dim("DB credential choice during setup:");
   dim("- DB password: recommended default, Muavin builds a safe direct URL");
   dim("- Full Postgres URL: use only if you want full control over the URI\n");
