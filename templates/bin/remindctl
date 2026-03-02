@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+deny() {
+  echo "muavin guard: remindctl delete operations are blocked" >&2
+  exit 64
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    delete|del|remove|rm|--delete|--remove)
+      deny
+      ;;
+  esac
+done
+
+SAFE_PATH="${MUAVIN_ORIGINAL_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+REAL_REMINDCTL="$(PATH="$SAFE_PATH" /usr/bin/which remindctl 2>/dev/null || true)"
+
+if [ -z "$REAL_REMINDCTL" ] || [ "$REAL_REMINDCTL" = "$0" ]; then
+  echo "muavin guard: real remindctl binary not found" >&2
+  exit 127
+fi
+
+exec "$REAL_REMINDCTL" "$@"

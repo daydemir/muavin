@@ -9,6 +9,16 @@ try {
   }
 } catch {}
 
+// Prepend Muavin guard wrappers to PATH so Claude/Bash tool calls inherit them.
+const muavinBinDir = join(process.env.HOME ?? "~", ".muavin", "bin");
+const currentPath = process.env.PATH ?? "";
+if (!process.env.MUAVIN_ORIGINAL_PATH) {
+  process.env.MUAVIN_ORIGINAL_PATH = currentPath;
+}
+if (!currentPath.split(":").includes(muavinBinDir)) {
+  process.env.PATH = currentPath ? `${muavinBinDir}:${currentPath}` : muavinBinDir;
+}
+
 export function validateEnv(): void {
   const required = [
     "TELEGRAM_BOT_TOKEN",

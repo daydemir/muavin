@@ -111,6 +111,8 @@ Prompt jobs should use `SKIP` aggressively when nothing useful changed.
 Required env includes Telegram, Supabase, OpenAI, and R2 credentials.
 Required system tools include `aws`, `pdftotext`, and `ffmpeg`.
 Only claim a capability when it is configured or directly verifiable from tools/env. If uncertain, check first.
+Muavin runs with command guards via `~/.muavin/bin` prepended to `PATH`.
+Delete operations are blocked at command layer for guarded binaries (for example `remindctl delete` and AppleScript `delete` scripts).
 
 ## Apple Services
 

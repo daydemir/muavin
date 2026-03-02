@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Bot } from "grammy";
 import { Cron } from "croner";
 import { resolve } from "path";
-import { readFile, mkdir } from "fs/promises";
+import { readFile, mkdir, chmod } from "fs/promises";
 import pc from "picocolors";
 import { listAgents } from "./agents";
 import { seedDefaultJobs, type Job } from "./jobs";
@@ -838,6 +838,7 @@ async function installTemplates() {
   const templatesDir = `${import.meta.dir}/../templates`;
   const docsDir = `${muavinDir}/docs`;
   const promptsDir = `${muavinDir}/prompts`;
+  const binDir = `${muavinDir}/bin`;
 
   const systemDir = `${muavinDir}/system`;
   const outboxDir = `${muavinDir}/outbox`;
@@ -845,6 +846,7 @@ async function installTemplates() {
 
   await mkdir(docsDir, { recursive: true });
   await mkdir(promptsDir, { recursive: true });
+  await mkdir(binDir, { recursive: true });
   await mkdir(systemDir, { recursive: true });
   await mkdir(outboxDir, { recursive: true });
   await mkdir(inboxFilesDir, { recursive: true });
@@ -889,6 +891,20 @@ async function installTemplates() {
     }
   }
   ok(`Installed prompts/ (${promptFiles.length} files)`);
+
+  // Install guarded wrapper binaries (always overwrite)
+  const binFiles = ["osascript", "remindctl"];
+  for (const binFile of binFiles) {
+    try {
+      const targetPath = `${binDir}/${binFile}`;
+      const content = await Bun.file(`${templatesDir}/bin/${binFile}`).text();
+      await Bun.write(targetPath, content);
+      await chmod(targetPath, 0o755);
+    } catch {
+      fail(`Could not install templates/bin/${binFile}`);
+    }
+  }
+  ok(`Installed bin guards/ (${binFiles.length} files)`);
 
   // Remove stale prompt files that are not part of the active prompt set
   const { readdir: readDir, unlink: unlinkPromptFile } = await import("fs/promises");

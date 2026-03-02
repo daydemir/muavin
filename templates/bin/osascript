@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+REAL_OSASCRIPT="/usr/bin/osascript"
+
+deny() {
+  echo "muavin guard: osascript delete operations are blocked" >&2
+  exit 64
+}
+
+has_inline_expr=0
+expect_expr=0
+script_text=""
+
+for arg in "$@"; do
+  if [ "$expect_expr" -eq 1 ]; then
+    has_inline_expr=1
+    script_text="${script_text}
+${arg}"
+    expect_expr=0
+    continue
+  fi
+
+  case "$arg" in
+    -e)
+      expect_expr=1
+      ;;
+  esac
+done
+
+if [ "$expect_expr" -eq 1 ]; then
+  deny
+fi
+
+# Guarded mode only supports inline script expressions.
+if [ "$has_inline_expr" -ne 1 ]; then
+  deny
+fi
+
+if printf "%s\n" "$script_text" | grep -Eiq '(^|[^[:alnum:]_])delete([^[:alnum:]_]|$)'; then
+  deny
+fi
+
+exec "$REAL_OSASCRIPT" "$@"

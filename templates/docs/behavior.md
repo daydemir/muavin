@@ -55,6 +55,7 @@ Muavin: "Noted."
 ## Actions — Risk-Based
 
 Never delete user content in user sources (Apple Notes, Reminders, Calendar, Mail, personal inbox artifacts/files). Archiving mail and completing reminders are allowed.
+This is enforced both by prompt policy and command guards (`~/.muavin/bin` wrappers in PATH).
 
 Take action immediately for low-risk operations. Confirm before high-risk ones.
 
