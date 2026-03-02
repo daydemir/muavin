@@ -29,6 +29,7 @@ process.on("uncaughtException", (err) => {
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const SESSIONS_FILE = join(MUAVIN_DIR, "sessions.json");
 const UPLOADS_DIR = join(MUAVIN_DIR, "uploads");
+const CONDUCTOR_CWD = join(MUAVIN_DIR, "conductor");
 
 // ── Constants ────────────────────────────────────────────────
 const TYPING_INTERVAL_MS = 4000;
@@ -55,6 +56,7 @@ await mkdir(UPLOADS_DIR, { recursive: true });
 await mkdir(join(MUAVIN_DIR, "outbox"), { recursive: true });
 await mkdir(join(MUAVIN_DIR, "agents"), { recursive: true });
 await mkdir(join(MUAVIN_DIR, "system"), { recursive: true });
+await mkdir(CONDUCTOR_CWD, { recursive: true });
 
 // ── Lock file ───────────────────────────────────────────────
 
@@ -250,6 +252,7 @@ async function generateVoiceReply(input: {
     chatId: input.chatId,
     recentCount: config.recentMessageCount ?? 20,
     full: true,
+    role: "conductor",
   });
 
   return runLLM({
@@ -261,6 +264,7 @@ async function generateVoiceReply(input: {
     maxTurns: config.relayMaxTurns ?? 100,
     toolPolicy: input.toolPolicy,
     ephemeral: input.ephemeral,
+    cwd: CONDUCTOR_CWD,
   });
 }
 

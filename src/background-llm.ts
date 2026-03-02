@@ -24,6 +24,7 @@ export async function runBackgroundPrompt(input: RunBackgroundPromptInput): Prom
         chatId: input.chatId,
         recentCount: input.recentCount,
         full: input.fullContext,
+        role: "worker",
       })
     : "";
 

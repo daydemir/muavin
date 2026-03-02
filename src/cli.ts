@@ -95,7 +95,9 @@ async function main() {
 async function liveConversationCommand() {
   heading("Starting live Muavin conversation...\n");
   const muavinDir = `${process.env.HOME}/.muavin`;
+  const conductorDir = `${muavinDir}/conductor`;
   const muavinPromptPath = `${muavinDir}/muavin.md`;
+  const conductorStylePath = `${muavinDir}/prompts/conductor-style.md`;
   const args = ["claude"];
 
   const promptFile = Bun.file(muavinPromptPath);
@@ -108,11 +110,21 @@ async function liveConversationCommand() {
     warn(`muavin prompt not found at ${muavinPromptPath}; starting plain claude session`);
   }
 
+  const styleFile = Bun.file(conductorStylePath);
+  if (await styleFile.exists()) {
+    const styleContent = (await styleFile.text()).trim();
+    if (styleContent) {
+      args.push("--append-system-prompt", styleContent);
+    }
+  }
+
+  await mkdir(conductorDir, { recursive: true });
+
   const proc = Bun.spawn(args, {
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
-    cwd: muavinDir,
+    cwd: conductorDir,
   });
   await proc.exited;
 
@@ -863,11 +875,15 @@ async function installTemplates() {
   ok(`Installed docs/ (${docFiles.length} files)`);
 
   // Install prompts (always overwrite)
-  const promptFiles = ["heartbeat-triage.md"];
+  const promptFiles = ["heartbeat-triage.md", "conductor-style.md"];
   for (const promptFile of promptFiles) {
     try {
+      const targetPath = `${promptsDir}/${promptFile}`;
+      if (promptFile === "conductor-style.md" && await Bun.file(targetPath).exists()) {
+        continue; // preserve user-customized conductor style overrides
+      }
       const content = await Bun.file(`${templatesDir}/prompts/${promptFile}`).text();
-      await Bun.write(`${promptsDir}/${promptFile}`, content);
+      await Bun.write(targetPath, content);
     } catch {
       fail(`Could not read templates/prompts/${promptFile}`);
     }
@@ -887,7 +903,15 @@ async function installTemplates() {
 
   // Install system CLAUDE.md for worker agents (always overwrite)
   const systemClaudePath = `${systemDir}/CLAUDE.md`;
-  await Bun.write(systemClaudePath, "You are a worker agent. Be concise. Return raw results.\n");
+  await Bun.write(
+    systemClaudePath,
+    [
+      "You are a worker agent. Be concise. Return raw results.",
+      "Never write style or behavior instructions into provider-owned files under ~/.claude/.",
+      "For persistent prompt/state updates, only modify Muavin-managed files under ~/.muavin/.",
+      "",
+    ].join("\n"),
+  );
   ok("Installed system/CLAUDE.md");
 
   // Seed default jobs (merge, don't overwrite)

@@ -4,6 +4,7 @@ import { MUAVIN_DIR, loadJson, saveJson, timeAgo, timestamp } from "./utils";
 import type { Job } from "./jobs";
 
 const AGENTS_DIR = join(MUAVIN_DIR, "agents");
+const PROMPTS_DIR = join(MUAVIN_DIR, "prompts");
 const SUPABASE_TIMEOUT_MS = 30_000;
 const WORKER_PATH = join(import.meta.dir, "memory-worker.ts");
 const BUN_PATH = process.execPath;
@@ -204,15 +205,28 @@ export async function buildContext(opts: {
   chatId?: number;
   recentCount?: number;
   full?: boolean;
+  role?: "conductor" | "worker";
 }): Promise<string> {
   const full = opts.full !== false; // default true
+  const role = opts.role ?? "worker";
   const parts: string[] = [];
 
-  // 1. Read muavin.md (voice only)
+  // 1. Read muavin.md (shared baseline prompt)
   if (full) {
     try {
       const muavinMd = await readFile(join(MUAVIN_DIR, "muavin.md"), "utf-8");
       parts.push(muavinMd.trim());
+    } catch {}
+  }
+
+  // 1b. Read conductor style overrides from Muavin-managed prompt file
+  if (full && role === "conductor") {
+    try {
+      const stylePrompt = await readFile(join(PROMPTS_DIR, "conductor-style.md"), "utf-8");
+      const trimmed = stylePrompt.trim();
+      if (trimmed) {
+        parts.push(trimmed);
+      }
     } catch {}
   }
 
