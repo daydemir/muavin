@@ -134,7 +134,9 @@ export function generateJobPlist(
   job: { id: string; schedule: string },
   bunPath: string,
   repoRoot: string,
-  homeDir: string
+  homeDir: string,
+  launchUser: string,
+  launchShell: string
 ): string {
   const label = jobLabel(job.id);
   const schedule = cronToLaunchd(job.schedule);
@@ -185,6 +187,12 @@ ${schedule.StartCalendarInterval.map(
         <string>${pathEnv}</string>
         <key>HOME</key>
         <string>${homeDir}</string>
+        <key>USER</key>
+        <string>${launchUser}</string>
+        <key>LOGNAME</key>
+        <string>${launchUser}</string>
+        <key>SHELL</key>
+        <string>${launchShell}</string>
     </dict>
 ${scheduleXml}
     <key>StandardOutPath</key>
@@ -206,6 +214,8 @@ export async function syncJobPlists(): Promise<void> {
   const config = await loadConfig();
   const repoRoot = config.repoPath || process.cwd();
   const homeDir = homedir();
+  const launchUser = process.env.USER ?? homeDir.split("/").pop() ?? "user";
+  const launchShell = process.env.SHELL ?? "/bin/zsh";
   const bunPath = Bun.which("bun");
   if (!bunPath) {
     throw new Error("bun not found in PATH");
@@ -223,7 +233,7 @@ export async function syncJobPlists(): Promise<void> {
   // Sync enabled jobs
   for (const job of enabledJobs) {
     const plistPath = join(launchAgentsDir, jobPlistName(job.id));
-    const newContent = generateJobPlist(job, bunPath, repoRoot, homeDir);
+    const newContent = generateJobPlist(job, bunPath, repoRoot, homeDir, launchUser, launchShell);
 
     const existingContent = await readFile(plistPath, "utf-8").catch(() => null);
     if (existingContent !== newContent) {

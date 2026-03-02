@@ -19,6 +19,12 @@
         <string>__HOME__/.local/bin:__HOME__/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
+        <key>USER</key>
+        <string>__USER__</string>
+        <key>LOGNAME</key>
+        <string>__USER__</string>
+        <key>SHELL</key>
+        <string>__SHELL__</string>
     </dict>
     <key>StartInterval</key>
     <integer>1800</integer>

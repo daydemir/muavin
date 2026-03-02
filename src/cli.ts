@@ -1372,6 +1372,8 @@ async function deployCommand() {
   heading("Deploying launch daemons...");
 
   const uid = await getUid();
+  const launchUser = process.env.USER ?? homeDir.split("/").pop() ?? "user";
+  const launchShell = process.env.SHELL ?? "/bin/zsh";
 
   const plists = [
     { file: "ai.muavin.relay.plist", label: "ai.muavin.relay" },
@@ -1390,6 +1392,8 @@ async function deployCommand() {
       .replace(/__BUN__/g, bunPath)
       .replace(/__REPO_ROOT__/g, repoRoot)
       .replace(/__HOME__/g, homeDir)
+      .replace(/__USER__/g, launchUser)
+      .replace(/__SHELL__/g, launchShell)
       .replace(/__RUN_AT_LOAD__/g, startOnLogin ? "<true/>" : "<false/>");
 
     await Bun.write(destPath, plistContent);
