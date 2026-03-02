@@ -11,6 +11,7 @@ function escapeAS(str: string): string {
 }
 
 async function runAS(script: string, timeoutMs = 30000, lang?: "JavaScript"): Promise<string> {
+  assertNonDestructiveScript(script);
   const args = lang ? ["osascript", "-l", lang, "-e", script] : ["osascript", "-e", script];
   const proc = Bun.spawn(args, {
     stdout: "pipe",
@@ -31,6 +32,22 @@ function ok(data: unknown) {
 
 function err(msg: string) {
   return { content: [{ type: "text" as const, text: JSON.stringify({ error: msg }) }], isError: true as const };
+}
+
+function policyDenied(action: string) {
+  return err(`Blocked by policy: ${action} is disabled. Muavin will not perform destructive actions on user content.`);
+}
+
+function assertNonDestructiveScript(script: string): void {
+  const destructivePatterns = [
+    /\bdelete\b/i,
+    /\bset\s+completed\s+of\b/i,
+    /\bmove\b[\s\S]{0,400}\bto\b/i,
+    /\barchive\b/i,
+  ];
+  if (destructivePatterns.some((re) => re.test(script))) {
+    throw new Error("Blocked by policy: destructive Apple operation is disabled");
+  }
 }
 
 /** convert ISO date string to AppleScript date literal */
@@ -175,31 +192,8 @@ server.tool(
     account: z.string(),
     mailbox: z.string(),
   },
-  async ({ messageId, account, mailbox }) => {
-    try {
-      // find archive mailbox for this account
-      const mbRaw = await runAS(`
-tell application "Mail"
-  set out to ""
-  repeat with mb in every mailbox of account "${escapeAS(account)}"
-    set out to out & name of mb & return
-  end repeat
-  return out
-end tell`);
-      const mbNames = mbRaw.split("\r").filter(Boolean).map((n) => n.trim());
-      const archiveName = mbNames.find((n) =>
-        /^archive$/i.test(n) || /^all mail$/i.test(n) || /all mail/i.test(n)
-      );
-      if (!archiveName) return err(`no archive mailbox found for account "${account}". available: ${mbNames.join(", ")}`);
-
-      await runAS(`
-tell application "Mail"
-  set m to (first message of mailbox "${escapeAS(mailbox)}" of account "${escapeAS(account)}" whose id is ${messageId})
-  set targetMb to mailbox "${escapeAS(archiveName)}" of account "${escapeAS(account)}"
-  move m to targetMb
-end tell`);
-      return ok({ archived: true, destination: archiveName });
-    } catch (e: unknown) { return err(String(e)); }
+  async () => {
+    return policyDenied("mail archive");
   },
 );
 
@@ -491,17 +485,8 @@ server.tool(
     reminderId: z.string(),
     list: z.string(),
   },
-  async ({ reminderId, list }) => {
-    try {
-      await runAS(`
-tell application "Reminders"
-  tell list "${escapeAS(list)}"
-    set r to (first reminder whose id is "${escapeAS(reminderId)}")
-    set completed of r to true
-  end tell
-end tell`);
-      return ok({ completed: true, reminderId });
-    } catch (e: unknown) { return err(String(e)); }
+  async () => {
+    return policyDenied("reminder completion");
   },
 );
 

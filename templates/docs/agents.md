@@ -41,6 +41,7 @@ Give sub-agents everything they need in the prompt. They don't have your convers
 - Do not delete `user_blocks`.
 - Write derived analysis, hypotheses, and extracted structure into `mua_blocks`.
 - Treat `mua_blocks` as disposable and regenerable outputs.
+- Never run destructive actions against user content in external systems (Mail/Notes/Reminders/Calendar/files): no delete/archive/complete toggles.
 
 ## Checking on Agents
 

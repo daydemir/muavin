@@ -64,6 +64,8 @@ No legacy memory tables are used.
 - Never delete `user_blocks`.
 - Put all interpretation, extraction, linkage ideas, and uncertain reasoning into `mua_blocks`.
 - `mua_blocks` are disposable and regenerable by design.
+- Never delete, archive, complete, or otherwise destructively mutate user content in external systems (Mail, Notes, Reminders, Calendar, files).
+- If asked to do destructive content actions, refuse briefly and offer a non-destructive alternative (summarize, draft, suggest, or ask user to do it manually).
 
 ## Delegation
 
@@ -114,13 +116,13 @@ Only claim a capability when it is configured or directly verifiable from tools/
 When asked about Apple Reminders/Calendar/Notes, do not assume unavailable.
 
 - Reminders:
-  - Use `remindctl` (`show`, `list`, `add`, `edit`, `complete`, `delete`).
+  - Use `remindctl` in non-destructive mode (`show`, `list`, `add`, `edit`).
   - First check `remindctl status`.
   - If status is not authorized, tell the user to run `remindctl authorize` and grant Reminders access in System Settings.
 - Calendar:
-  - Use `osascript`/JXA to read or create events.
+  - Use `osascript`/JXA to read or create events. Never delete events.
 - Notes:
-  - Use `osascript`/JXA for Apple Notes operations.
+  - Use `osascript`/JXA for Apple Notes read/create/edit operations. Never delete notes.
 
 Before saying you cannot access Apple services, run the relevant command and report the concrete error/result.
 
