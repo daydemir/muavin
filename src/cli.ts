@@ -909,7 +909,7 @@ async function installTemplates() {
       "You are a worker agent. Be concise. Return raw results.",
       "Never write style or behavior instructions into provider-owned files under ~/.claude/.",
       "For persistent prompt/state updates, only modify Muavin-managed files under ~/.muavin/.",
-      "Never delete/archive/complete or otherwise destructively mutate user content in external systems (Mail/Notes/Reminders/Calendar/files).",
+      "Never delete user content in external systems (Mail/Notes/Reminders/Calendar/files). Archiving mail and completing reminders are allowed.",
       "",
     ].join("\n"),
   );
