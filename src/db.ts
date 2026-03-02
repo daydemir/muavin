@@ -1,5 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { EMBEDDING_DIMS, EMBEDDING_MODEL, EMBEDDING_TIMEOUT_MS } from "./constants";
+import { validateEnv } from "./env";
+
+validateEnv();
 
 export const DEFAULT_EMBEDDING_PROFILE_ID = "default-512";
 
