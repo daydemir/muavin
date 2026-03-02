@@ -325,6 +325,58 @@ async function checkExistingOpenAI(
   }
 }
 
+function extractSupabaseProjectRef(url: string): string | null {
+  const match = url.match(/https:\/\/([^.]+)\.supabase\.co/);
+  return match?.[1] ?? null;
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  if (!Bun.which("pbcopy")) return false;
+  try {
+    const proc = Bun.spawn(["pbcopy"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    proc.stdin.write(text);
+    proc.stdin.end();
+    await proc.exited;
+    return proc.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function openInBrowser(url: string): Promise<boolean> {
+  if (!Bun.which("open")) return false;
+  try {
+    const proc = Bun.spawn(["open", url], { stdout: "pipe", stderr: "pipe" });
+    await proc.exited;
+    return proc.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function promptSupabaseSchemaRun(projectRef: string): Promise<void> {
+  const schemaPath = resolve(import.meta.dir, "..", "supabase-schema.sql");
+  const schemaSql = await Bun.file(schemaPath).text();
+  const sqlEditorUrl = `https://supabase.com/dashboard/project/${projectRef}/sql/new`;
+
+  const copied = await copyToClipboard(schemaSql);
+  const opened = await openInBrowser(sqlEditorUrl);
+
+  console.log();
+  if (copied) ok("Schema SQL copied to clipboard");
+  else warn("Could not copy schema SQL to clipboard (common in SSH/headless sessions)");
+
+  if (opened) ok("Opening SQL Editor in browser");
+  else warn("Could not auto-open browser");
+
+  dim(`SQL editor URL: ${sqlEditorUrl}`);
+  dim(`Schema file: ${schemaPath}`);
+  if (!copied) dim(`Copy manually: cat ${schemaPath}`);
+  console.log();
+  dim("Run the schema SQL in Supabase, then return here.");
+  prompt("Press Enter when done...");
+}
+
 async function checkExistingSupabase(
   existingEnv: Record<string, string>
 ): Promise<{ url: string; key: string } | null> {
@@ -343,30 +395,12 @@ async function checkExistingSupabase(
     if (error && (error.code === "42P01" || error.message?.includes("not find the table"))) {
       warn("Supabase credentials exist but tables not found, setting up schema...\n");
 
-      // Extract project ref from URL
-      const match = url.match(/https:\/\/([^.]+)\.supabase\.co/);
-      if (!match) {
+      const projectRef = extractSupabaseProjectRef(url);
+      if (!projectRef) {
         fail("Could not extract project reference from URL");
         return null;
       }
-      const projectRef = match[1];
-
-      // Copy schema SQL to clipboard and open SQL editor
-      const schemaPath = resolve(import.meta.dir, "..", "supabase-schema.sql");
-      const schemaSql = await Bun.file(schemaPath).text();
-      const pbcopy = Bun.spawn(["pbcopy"], { stdin: "pipe" });
-      pbcopy.stdin.write(schemaSql);
-      pbcopy.stdin.end();
-      await pbcopy.exited;
-
-      const sqlEditorUrl = `https://supabase.com/dashboard/project/${projectRef}/sql/new`;
-      Bun.spawn(["open", sqlEditorUrl]);
-
-      ok("Schema SQL copied to clipboard");
-      ok("Opening SQL Editor in browser");
-      console.log("\nJust paste (⌘V) and click Run.\n");
-
-      prompt("Press Enter when done...");
+      await promptSupabaseSchemaRun(projectRef);
 
       // Re-verify
       const { error: retryError } = await client.from("user_blocks").select("id").limit(1);
@@ -607,31 +641,12 @@ async function setupSupabase(): Promise<{ url: string; key: string } | null> {
       console.log();
       fail("Tables not found. Setting up schema...");
 
-      // Extract project ref from URL
-      const match = url.match(/https:\/\/([^.]+)\.supabase\.co/);
-      if (!match) {
+      const projectRef = extractSupabaseProjectRef(url);
+      if (!projectRef) {
         fail("Could not extract project reference from URL");
         return null;
       }
-      const projectRef = match[1];
-
-      // Copy schema SQL to clipboard and open SQL editor
-      const schemaPath = resolve(import.meta.dir, "..", "supabase-schema.sql");
-      const schemaSql = await Bun.file(schemaPath).text();
-      const pbcopy = Bun.spawn(["pbcopy"], { stdin: "pipe" });
-      pbcopy.stdin.write(schemaSql);
-      pbcopy.stdin.end();
-      await pbcopy.exited;
-
-      const sqlEditorUrl = `https://supabase.com/dashboard/project/${projectRef}/sql/new`;
-      Bun.spawn(["open", sqlEditorUrl]);
-
-      console.log();
-      ok("Schema SQL copied to clipboard");
-      ok("Opening SQL Editor in browser");
-      console.log("\nJust paste (⌘V) and click Run.\n");
-
-      prompt("Press Enter when done...");
+      await promptSupabaseSchemaRun(projectRef);
 
       // Re-verify
       const { error: retryError } = await client.from("user_blocks").select("id").limit(1);
