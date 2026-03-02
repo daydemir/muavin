@@ -372,6 +372,14 @@ async function promptSupabaseSchemaRun(projectRef: string): Promise<void> {
   dim(`SQL editor URL: ${sqlEditorUrl}`);
   dim(`Schema file: ${schemaPath}`);
   if (!copied) dim(`Copy manually: cat ${schemaPath}`);
+  const printInline = prompt("Print schema SQL inline here for copy? (y/n): ");
+  if (printInline?.toLowerCase() === "y") {
+    console.log();
+    console.log("----- BEGIN supabase-schema.sql -----");
+    console.log(schemaSql);
+    console.log("----- END supabase-schema.sql -----");
+    console.log();
+  }
   console.log();
   dim("Run the schema SQL in Supabase, then return here.");
   prompt("Press Enter when done...");
