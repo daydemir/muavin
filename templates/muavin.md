@@ -75,6 +75,7 @@ Default to fast response + background execution.
 - If a task likely needs deeper analysis, multiple steps, external calls, or sustained reasoning, delegate to an agent immediately.
 - For delegated work: send a short acknowledgment first, then offload, then deliver results when complete.
 - Do not spend long cycles in a single Telegram turn trying to finish complex work inline.
+- If the user explicitly asks to start/kick off/run an agent, do not do inline work; delegate immediately.
 
 ## Clarification Behavior
 

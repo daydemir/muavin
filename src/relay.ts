@@ -5,7 +5,7 @@ import { watch } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { killAllChildren, waitForChildren, activeChildPids } from "./claude";
-import { buildContext, listAgents, updateAgent, type AgentFile } from "./agents";
+import { buildContext, createAgent, listAgents, updateAgent, type AgentFile } from "./agents";
 import { syncJobPlists } from "./jobs";
 import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, claimOutboxItems, restoreUndeliveredOutbox, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
@@ -39,6 +39,12 @@ const CHECK_INTERVAL_MS = 30000;
 const STALE_STATUS_MS = 5 * 60 * 1000;
 const STUCK_AGENT_MS = 2 * 60 * 60 * 1000;
 const TELEGRAM_MAX_LENGTH = 4000;
+const DEFAULT_RELAY_TIMEOUT_MS = 30_000;
+const DEFAULT_RELAY_MAX_TURNS = 8;
+const MAX_RELAY_TIMEOUT_MS = 45_000;
+const MAX_RELAY_MAX_TURNS = 12;
+const EXPLICIT_AGENT_REQUEST_RE =
+  /(?:^|\b)(kick off|start|launch|create|run|spin up)\s+(?:an?\s+)?agent\b/i;
 
 
 // ── Allow list from config ─────────────────────────────────
@@ -238,6 +244,50 @@ function buildTelegramConversationPrompt(ctx: Context, prompt: string): { fullPr
   return { fullPrompt, chatId };
 }
 
+function isExplicitAgentRequest(input: string): boolean {
+  return EXPLICIT_AGENT_REQUEST_RE.test(input);
+}
+
+function extractAgentTask(input: string): string {
+  const stripped = input
+    .replace(
+      /(?:^|\b)(?:kick off|start|launch|create|run|spin up)\s+(?:an?\s+)?agent(?:\s+that(?:\s+will)?)?\s*/i,
+      "",
+    )
+    .trim();
+  return stripped || input.trim();
+}
+
+async function enqueueDelegatedAgent(chatId: number, userRequest: string): Promise<AgentFile> {
+  const task = extractAgentTask(userRequest);
+  const prompt = [
+    "Complete the user's request and return the final user-facing result.",
+    "Use available tools when needed.",
+    "If the request asks for a future-time action you cannot wait for, explain clearly and provide the best immediate actionable result.",
+    "",
+    `User request: ${task}`,
+  ].join("\n");
+
+  const agent = await createAgent({
+    task: task.slice(0, 180),
+    prompt,
+    chatId,
+  });
+
+  await logSystemEvent({
+    level: "info",
+    component: "relay",
+    eventType: "agent_auto_delegated",
+    message: "Delegated user request to background agent",
+    payload: { chat_id: chatId, agent_id: agent.id, task: task.slice(0, 200) },
+  }).catch(() => {});
+
+  checkPendingAgents().catch(e =>
+    console.error(timestamp("relay"), "checkPendingAgents after auto-delegate failed:", e),
+  );
+  return agent;
+}
+
 async function generateVoiceReply(input: {
   task: LlmTask;
   query: string;
@@ -260,8 +310,14 @@ async function generateVoiceReply(input: {
     prompt: input.prompt,
     sessionId: input.sessionId,
     contextPrompt,
-    timeoutMs: config.relayTimeoutMs ?? 600000,
-    maxTurns: config.relayMaxTurns ?? 100,
+    timeoutMs: Math.min(
+      MAX_RELAY_TIMEOUT_MS,
+      Math.max(5_000, config.relayTimeoutMs ?? DEFAULT_RELAY_TIMEOUT_MS),
+    ),
+    maxTurns: Math.min(
+      MAX_RELAY_MAX_TURNS,
+      Math.max(1, config.relayMaxTurns ?? DEFAULT_RELAY_MAX_TURNS),
+    ),
     toolPolicy: input.toolPolicy,
     ephemeral: input.ephemeral,
     cwd: CONDUCTOR_CWD,
@@ -289,6 +345,14 @@ async function processUserMessage(item: QueuedUserMessage): Promise<void> {
     });
 
     const { fullPrompt, chatId: numericChatId } = buildTelegramConversationPrompt(ctx, prompt);
+
+    if (isExplicitAgentRequest(prompt)) {
+      const agent = await enqueueDelegatedAgent(numericChatId, prompt);
+      const ack = `queued. running agent ${agent.id} now - i'll send the result shortly.`;
+      await logMuaTelegramBlock(ctx, ack, { kind: "relay_reply", delegated_agent_id: agent.id });
+      await sendResponse(ctx, ack);
+      return;
+    }
 
     const chatId = String(ctx.chat?.id ?? "unknown");
     const session = getSession(sessions, chatId);
@@ -325,7 +389,26 @@ async function processUserMessage(item: QueuedUserMessage): Promise<void> {
     }
   } catch (error) {
     console.error("Error in processUserMessage:", error);
-    const errorMsg = `Error: ${formatError(error)}`;
+    const errorStr = formatError(error);
+
+    if (errorStr.includes("Claude timed out")) {
+      try {
+        const chatId = Number(ctx.chat?.id ?? 0);
+        const agent = await enqueueDelegatedAgent(chatId, prompt);
+        const timeoutAck = `this request took too long inline, so i delegated it to agent ${agent.id}. i'll send results when done.`;
+        await logMuaTelegramBlock(ctx, timeoutAck, {
+          kind: "relay_reply",
+          delegated_agent_id: agent.id,
+          delegated_reason: "relay_timeout",
+        });
+        await sendResponse(ctx, timeoutAck);
+        return;
+      } catch (delegateError) {
+        console.error("Timeout fallback delegation failed:", delegateError);
+      }
+    }
+
+    const errorMsg = `Error: ${errorStr}`;
     await logSystemEvent({
       level: "error",
       component: "relay",
