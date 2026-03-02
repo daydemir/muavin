@@ -24,7 +24,6 @@ No legacy `messages/memory` tables are used.
 - Bun
 - Claude Code CLI
 - Supabase (with `supabase-schema.sql` applied)
-- Optional direct Postgres URL (`SUPABASE_DB_URL`) for automatic schema setup/migrations
 - OpenAI API key (embeddings + transcription/vision extraction)
 - Cloudflare R2 (required)
 - System tools: `aws`, `pdftotext`, `ffmpeg`
@@ -61,9 +60,6 @@ bun muavin test
 - `R2_ENDPOINT_URL`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
-
-Optional but recommended:
-- `SUPABASE_DB_URL` (for automatic schema application and migration workflows)
 
 ## License
 

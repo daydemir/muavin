@@ -1,5 +1,4 @@
 import { createClient } from "@supabase/supabase-js";
-import { SQL } from "bun";
 
 import { Bot } from "grammy";
 import { Cron } from "croner";
@@ -140,7 +139,6 @@ async function setupCommand() {
   heading("Setup inputs you'll need:");
   dim("- Telegram bot token + your Telegram user ID");
   dim("- Supabase project URL + service_role key");
-  dim("- Supabase DB password or Postgres URL (optional but recommended for auto schema/migrations)");
   dim("- OpenAI API key");
   dim("- Cloudflare R2 bucket + endpoint + access key + secret");
   dim("- Anthropic API key (required for Claude-backed runtime)\n");
@@ -171,29 +169,14 @@ async function setupCommand() {
 
   // Step 3: Setup Supabase (or skip if already configured)
   let supabase = await checkExistingSupabase(existingEnv);
-  if (supabase) {
-    const updates: Record<string, string> = {};
-    if (existingEnv.SUPABASE_URL !== supabase.url) {
-      updates.SUPABASE_URL = supabase.url;
-      updates.SUPABASE_SERVICE_KEY = supabase.key;
-    }
-    if (supabase.dbUrl && existingEnv.SUPABASE_DB_URL !== supabase.dbUrl) {
-      updates.SUPABASE_DB_URL = supabase.dbUrl;
-    }
-    if (Object.keys(updates).length > 0) {
-      await updateEnvFile(updates);
-      ok("Updated Supabase settings in .env\n");
-    }
+  if (supabase && existingEnv.SUPABASE_URL !== supabase.url) {
+    await updateEnvFile({ SUPABASE_URL: supabase.url, SUPABASE_SERVICE_KEY: supabase.key });
+    ok("Normalized Supabase URL in .env\n");
   }
   if (!supabase) {
     supabase = await setupSupabase();
     if (!supabase) return;
-    const updates: Record<string, string> = {
-      SUPABASE_URL: supabase.url,
-      SUPABASE_SERVICE_KEY: supabase.key,
-    };
-    if (supabase.dbUrl) updates.SUPABASE_DB_URL = supabase.dbUrl;
-    await updateEnvFile(updates);
+    await updateEnvFile({ SUPABASE_URL: supabase.url, SUPABASE_SERVICE_KEY: supabase.key });
   }
 
   // Step 4: Setup OpenAI (or skip if already configured)
@@ -371,104 +354,6 @@ function formatSupabaseConnectionError(message: string): string {
   return msg;
 }
 
-function normalizePostgresConnectionUrl(input: string): string | null {
-  const raw = input.trim();
-  if (!raw) return null;
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") return null;
-    if (!url.pathname || url.pathname === "/") url.pathname = "/postgres";
-    if (!url.searchParams.get("sslmode")) url.searchParams.set("sslmode", "require");
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-function buildSupabaseDbUrl(projectRef: string, dbPassword: string): string {
-  return `postgresql://postgres:${encodeURIComponent(dbPassword)}@db.${projectRef}.supabase.co:5432/postgres?sslmode=require`;
-}
-
-async function promptSupabaseDbUrl(projectRef: string): Promise<string | null> {
-  console.log();
-  dim("Optional: configure direct DB connection for automatic schema setup and future migrations.");
-  dim("Where to get credentials:");
-  dim("- Postgres URL: Dashboard top bar → Connect → choose URI format");
-  dim("- DB password: your Postgres password for user 'postgres' (if unknown, reset it from dashboard settings)\n");
-  dim("Pick an option:");
-  dim("- 1 = DB password (recommended; Muavin builds the URL)");
-  dim("- 2 = Full Postgres URL");
-  dim("- Enter = skip direct DB setup for now");
-  dim(`Built URL format for option 1: postgresql://postgres:<password>@db.${projectRef}.supabase.co:5432/postgres?sslmode=require\n`);
-
-  const mode = prompt("DB connection mode [1/2] (Enter to skip): ")?.trim();
-  if (!mode) return null;
-
-  if (mode === "2") {
-    const rawDbUrl = prompt("Enter Postgres URL: ");
-    if (!rawDbUrl) {
-      fail("No Postgres URL provided");
-      return null;
-    }
-    const normalized = normalizePostgresConnectionUrl(rawDbUrl);
-    if (!normalized) {
-      fail("Invalid Postgres URL (expected postgres:// or postgresql://)");
-      return null;
-    }
-    return normalized;
-  }
-  if (mode !== "1") {
-    fail("Invalid choice. Enter 1, 2, or press Enter to skip.");
-    return null;
-  }
-
-  const password = prompt("Enter Supabase DB password (postgres user): ");
-  if (!password) {
-    fail("No DB password provided");
-    return null;
-  }
-  return buildSupabaseDbUrl(projectRef, password);
-}
-
-function formatDbConnectionError(error: unknown): string {
-  const msg = error instanceof Error ? error.message : String(error ?? "");
-  if (!msg) return "Unknown database error";
-  if (msg.length > 240) return `${msg.slice(0, 240)}...`;
-  return msg;
-}
-
-async function applySchemaViaDirectDb(dbUrl: string): Promise<void> {
-  const schemaPath = resolve(import.meta.dir, "..", "supabase-schema.sql");
-  const schemaSql = await Bun.file(schemaPath).text();
-  const sql = new SQL(dbUrl, { max: 1, connectionTimeout: 30, idleTimeout: 10 });
-  try {
-    await sql.connect();
-    await sql(schemaSql).simple().execute();
-  } finally {
-    await sql.close({ timeout: 3 }).catch(() => {});
-  }
-}
-
-async function tryAutoApplySupabaseSchema(
-  projectRef: string,
-  existingDbUrl?: string
-): Promise<{ applied: boolean; dbUrl?: string }> {
-  let dbUrl = existingDbUrl ? normalizePostgresConnectionUrl(existingDbUrl) : null;
-  if (!dbUrl) {
-    dbUrl = await promptSupabaseDbUrl(projectRef);
-  }
-  if (!dbUrl) return { applied: false };
-
-  try {
-    await applySchemaViaDirectDb(dbUrl);
-    ok("Schema applied via direct database connection");
-    return { applied: true, dbUrl };
-  } catch (error) {
-    warn(`Direct schema apply failed: ${formatDbConnectionError(error)}`);
-    return { applied: false };
-  }
-}
-
 async function copyToClipboard(text: string): Promise<boolean> {
   if (!Bun.which("pbcopy")) return false;
   try {
@@ -526,7 +411,7 @@ async function promptSupabaseSchemaRun(projectRef: string): Promise<void> {
 
 async function checkExistingSupabase(
   existingEnv: Record<string, string>
-): Promise<{ url: string; key: string; dbUrl?: string } | null> {
+): Promise<{ url: string; key: string } | null> {
   const inputUrl = existingEnv.SUPABASE_URL;
   const key = existingEnv.SUPABASE_SERVICE_KEY;
 
@@ -552,10 +437,7 @@ async function checkExistingSupabase(
         fail("Could not extract project reference from URL");
         return null;
       }
-      const autoApply = await tryAutoApplySupabaseSchema(projectRef, existingEnv.SUPABASE_DB_URL);
-      if (!autoApply.applied) {
-        await promptSupabaseSchemaRun(projectRef);
-      }
+      await promptSupabaseSchemaRun(projectRef);
 
       // Re-verify
       const { error: retryError } = await client.from("user_blocks").select("id").limit(1);
@@ -565,14 +447,14 @@ async function checkExistingSupabase(
       }
 
       ok("Supabase connection verified\n");
-      return { url, key, dbUrl: autoApply.applied ? autoApply.dbUrl : existingEnv.SUPABASE_DB_URL };
+      return { url, key };
     } else if (error) {
       warn(`Supabase credentials exist but connection failed: ${formatSupabaseConnectionError(error.message)}\n`);
       return null;
     }
 
     ok("Supabase already configured\n");
-    return { url, key, dbUrl: existingEnv.SUPABASE_DB_URL };
+    return { url, key };
   } catch {
     warn("Could not validate existing Supabase credentials, re-configuring...\n");
     return null;
@@ -769,17 +651,11 @@ async function setupRequiredR2(existingEnv: Record<string, string>): Promise<boo
   return true;
 }
 
-async function setupSupabase(): Promise<{ url: string; key: string; dbUrl?: string } | null> {
+async function setupSupabase(): Promise<{ url: string; key: string } | null> {
   heading("Setting up Supabase...");
   dim("1. Go to your Supabase project dashboard");
   dim("2. Project Settings → API → Project API keys");
   dim("3. Copy the 'service_role' key (the secret one, NOT anon)\n");
-  dim("Optional for automatic schema/migrations:");
-  dim("4. For full Postgres URL: use top-bar Connect and copy URI connection string");
-  dim("5. For DB password mode: use your Postgres password for user 'postgres' (reset from dashboard settings if unknown)\n");
-  dim("DB credential choice during setup:");
-  dim("- DB password: recommended default, Muavin builds a safe direct URL");
-  dim("- Full Postgres URL: use only if you want full control over the URI\n");
   dim("Project URL can be either:");
   dim("- https://<project-ref>.supabase.co");
   dim("- https://supabase.com/dashboard/project/<project-ref>/...\n");
@@ -807,7 +683,6 @@ async function setupSupabase(): Promise<{ url: string; key: string; dbUrl?: stri
 
   // Test connection
   const client = createClient(url, key);
-  let dbUrl: string | undefined = undefined;
   try {
     const { error } = await client.from("user_blocks").select("id").limit(1);
 
@@ -820,13 +695,7 @@ async function setupSupabase(): Promise<{ url: string; key: string; dbUrl?: stri
         fail("Could not extract project reference from URL");
         return null;
       }
-      const autoApply = await tryAutoApplySupabaseSchema(projectRef);
-      if (autoApply.applied && autoApply.dbUrl) {
-        dbUrl = autoApply.dbUrl;
-      }
-      if (!autoApply.applied) {
-        await promptSupabaseSchemaRun(projectRef);
-      }
+      await promptSupabaseSchemaRun(projectRef);
 
       // Re-verify
       const { error: retryError } = await client.from("user_blocks").select("id").limit(1);
@@ -841,7 +710,7 @@ async function setupSupabase(): Promise<{ url: string; key: string; dbUrl?: stri
     }
 
     ok("Supabase connection verified\n");
-    return { url, key, dbUrl };
+    return { url, key };
   } catch (error) {
     fail("Failed to connect to Supabase");
     return null;
@@ -1060,7 +929,6 @@ const configSections: ConfigSection[] = [
       { key: "owner", label: "Telegram user ID", source: "config", type: "number" },
       { key: "SUPABASE_URL", label: "Supabase URL", source: "env", type: "secret" },
       { key: "SUPABASE_SERVICE_KEY", label: "Supabase service key", source: "env", type: "secret" },
-      { key: "SUPABASE_DB_URL", label: "Supabase Postgres URL (optional)", source: "env", type: "secret" },
     ],
   },
   {
@@ -1267,16 +1135,6 @@ async function editField(
         return;
       }
     }
-  }
-
-  if (field.key === "SUPABASE_DB_URL") {
-    const normalized = normalizePostgresConnectionUrl(newValue);
-    if (!normalized) {
-      fail("Invalid Postgres URL (expected postgres:// or postgresql://)");
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      return;
-    }
-    valueToStore = normalized;
   }
 
   if (field.key === "OPENAI_API_KEY") {
