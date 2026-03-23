@@ -67,6 +67,9 @@ async function main() {
     case "process":
       await (await import("./blocks-cli")).processCommand(Bun.argv.slice(3));
       break;
+    case "blocks":
+      await (await import("./blocks-cli")).blocksCommand(Bun.argv.slice(3));
+      break;
     case "live":
       await liveConversationCommand();
       break;
@@ -92,12 +95,55 @@ async function main() {
   }
 }
 
+const LIVE_INSTRUCTIONS = `## Live Session — Block System
+
+You have access to Muavin's block storage via CLI commands. Your conversation is being automatically persisted.
+
+### Available commands (via Bash tool):
+- \`bun muavin blocks search "query"\` — Search memory for relevant context
+- \`bun muavin blocks search "query" --json\` — Same but returns JSON
+- \`bun muavin blocks create --content "..." --source live --kind mua\` — Save a note or insight
+- \`bun muavin blocks recent\` — View recent conversation blocks
+
+### When to use these:
+- Search memory when the user references something from a past conversation or when you need background context
+- Create mua blocks to save important insights, decisions, action items, or synthesized information that should persist beyond this session
+- You do NOT need to save your conversational responses — that happens automatically
+- Only save substantive insights, decisions, plans, and extracted facts as blocks`;
+
+const MUAVIN_REPO_DIR = "/Users/deniz/Build/muavin";
+
 async function liveConversationCommand() {
   heading("Starting live Muavin conversation...\n");
   const muavinDir = `${process.env.HOME}/.muavin`;
-  const conductorDir = `${muavinDir}/conductor`;
   const muavinPromptPath = `${muavinDir}/muavin.md`;
   const conductorStylePath = `${muavinDir}/prompts/conductor-style.md`;
+
+  // Parse flags from argv
+  const argv = Bun.argv.slice(3);
+  let cwdOverride: string | undefined;
+  let resumeArg: string | undefined;
+  let continueFlag = false;
+  let nameArg: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--cwd" && argv[i + 1]) {
+      cwdOverride = argv[++i];
+    } else if ((arg === "--resume" || arg === "-r") && argv[i + 1] && !argv[i + 1].startsWith("-")) {
+      resumeArg = argv[++i];
+    } else if (arg === "--resume" || arg === "-r") {
+      resumeArg = "";
+    } else if (arg === "--continue" || arg === "-c") {
+      continueFlag = true;
+    } else if (arg === "--name" && argv[i + 1]) {
+      nameArg = argv[++i];
+    }
+  }
+
+  const conductorDir = cwdOverride ?? `${muavinDir}/conductor`;
+  await mkdir(conductorDir, { recursive: true });
+
   const args = ["claude"];
 
   const promptFile = Bun.file(muavinPromptPath);
@@ -118,7 +164,46 @@ async function liveConversationCommand() {
     }
   }
 
-  await mkdir(conductorDir, { recursive: true });
+  args.push("--append-system-prompt", LIVE_INSTRUCTIONS);
+
+  if (resumeArg !== undefined) {
+    if (resumeArg) {
+      args.push("--resume", resumeArg);
+    } else {
+      args.push("--resume");
+    }
+  }
+  if (continueFlag) args.push("--continue");
+  if (nameArg) args.push("--name", nameArg);
+
+  // Write hooks settings to /tmp and pass via --settings
+  const hooksSettings = {
+    hooks: {
+      UserPromptSubmit: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `bun run ${MUAVIN_REPO_DIR}/src/hooks/live-user-prompt.ts`,
+            },
+          ],
+        },
+      ],
+      Stop: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `bun run ${MUAVIN_REPO_DIR}/src/hooks/live-stop.ts`,
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const settingsPath = "/tmp/muavin-live-settings.json";
+  await Bun.write(settingsPath, JSON.stringify(hooksSettings, null, 2));
+  args.push("--settings", settingsPath);
 
   const proc = Bun.spawn(args, {
     stdin: "inherit",

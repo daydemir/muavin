@@ -18,7 +18,8 @@ export type BlockSource =
   | "import"
   | "system"
   | "job"
-  | "agent";
+  | "agent"
+  | "live";
 export type BlockScope = "user" | "all";
 
 export interface RelatedBlock {
