@@ -229,14 +229,179 @@ export async function inboxCommand(args: string[]): Promise<void> {
   }
 }
 
+export async function ingestVerbatimCommand(args: string[]): Promise<void> {
+  const dirPath = args.find((a) => !a.startsWith("--"));
+  const parsed = parseArgs(args);
+  const dryRun = parsed.flags.has("dry-run");
+  const delay = parsed.values.delay ? Number(parsed.values.delay) : 100;
+  const uncertainFiles = new Set(
+    Object.entries(parsed.values)
+      .filter(([k]) => k === "uncertain")
+      .map(([, v]) => v),
+  );
+
+  if (!dirPath) {
+    process.stderr.write("usage: bun muavin ingest verbatim <directory-path> [--dry-run] [--delay <ms>]\n");
+    process.exit(1);
+  }
+
+  const batchId = crypto.randomUUID();
+  process.stderr.write(`Batch: ${batchId}\n`);
+
+  const { readdir: fsReaddir, readFile: fsReadFile } = await import("fs/promises");
+  const { basename: pathBasename, join: pathJoin } = await import("path");
+
+  let allFiles: string[];
+  try {
+    allFiles = await fsReaddir(dirPath);
+  } catch (e) {
+    process.stderr.write(`error: cannot read directory ${dirPath}: ${String(e)}\n`);
+    process.exit(1);
+  }
+
+  const userFiles = allFiles
+    .filter((f) => f.endsWith("-user.md"))
+    .sort();
+
+  process.stderr.write(`Found: ${userFiles.length} user files\n`);
+
+  if (userFiles.length === 0) {
+    process.stdout.write("Done.\nCreated: 0\nDuplicates: 0\nEmpty/skipped: 0\nUncertain: 0\n");
+    return;
+  }
+
+  process.stderr.write("Processing...\n");
+
+  let countCreated = 0;
+  let countDuplicate = 0;
+  let countEmpty = 0;
+  let countUncertain = 0;
+
+  for (let i = 0; i < userFiles.length; i++) {
+    const filename = userFiles[i] as string;
+    const filePath = pathJoin(dirPath, filename);
+    const base = pathBasename(filename);
+    const idx = i + 1;
+
+    if (idx % 25 === 0 || idx === 1) {
+      process.stderr.write(`[${idx}/${userFiles.length}] Processing ${base}...\n`);
+    }
+
+    let raw: string;
+    try {
+      raw = await fsReadFile(filePath, "utf-8");
+    } catch (e) {
+      process.stderr.write(`[${idx}/${userFiles.length}] error reading ${base}: ${String(e)}\n`);
+      continue;
+    }
+
+    // Strip header lines (# ...) at top, metadata lines (**Date**:, **Time**:, ---), trim
+    const lines = raw.split("\n");
+    const contentLines: string[] = [];
+    let headerDone = false;
+    for (const line of lines) {
+      if (!headerDone) {
+        if (line.startsWith("#") || line.match(/^\*\*(Date|Time)\*\*:/) || line.trim() === "---") {
+          continue;
+        }
+        headerDone = true;
+      }
+      contentLines.push(line);
+    }
+    const content = contentLines.join("\n").trim();
+
+    if (content.length < 10) {
+      countEmpty++;
+      continue;
+    }
+
+    // Parse timestamp from filename: 2025-12-17-150000-user.md or 2026-02-01-user.md
+    let parsedTimestamp: string;
+    const withTime = base.match(/^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})-user\.md$/);
+    const dateOnly = base.match(/^(\d{4})-(\d{2})-(\d{2})-user\.md$/);
+    if (withTime) {
+      const [, yr, mo, dy, hh, mm, ss] = withTime;
+      parsedTimestamp = `${yr}-${mo}-${dy}T${hh}:${mm}:${ss}`;
+    } else if (dateOnly) {
+      const [, yr, mo, dy] = dateOnly;
+      parsedTimestamp = `${yr}-${mo}-${dy}T00:00:00`;
+    } else {
+      parsedTimestamp = new Date().toISOString().slice(0, 19);
+    }
+
+    // Dedup check
+    const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+    const contentHash = Buffer.from(hashBuf).toString("hex");
+
+    if (!dryRun) {
+      const { data: existing } = await supabase
+        .from("user_block_versions")
+        .select("id")
+        .eq("content_hash", contentHash)
+        .eq("capture_reason", "create")
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        countDuplicate++;
+        continue;
+      }
+    }
+
+    const isUncertain = uncertainFiles.has(base);
+    if (isUncertain) countUncertain++;
+
+    process.stderr.write(`[${idx}/${userFiles.length}] ${base} (${content.length} chars)${dryRun ? " [dry-run]" : ""}\n`);
+
+    if (!dryRun) {
+      try {
+        await createUserBlock({
+          rawContent: content,
+          source: "import",
+          sourceRef: {
+            v: 1,
+            type: "import_batch",
+            id: { batch_id: batchId, origin: "verbatim" },
+            extras: { original_date: parsedTimestamp, filename: base },
+          },
+          metadata: {
+            import_run: batchId,
+            original_timestamp: parsedTimestamp,
+            filename: base,
+            origin: "mix-assistant-verbatim",
+            ...(isUncertain ? { uncertain: true } : {}),
+          },
+        });
+        countCreated++;
+      } catch (e) {
+        process.stderr.write(`[${idx}/${userFiles.length}] error creating block for ${base}: ${String(e)}\n`);
+      }
+
+      if (delay > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+    } else {
+      countCreated++;
+    }
+  }
+
+  process.stdout.write(`Done.\nCreated: ${countCreated}\nDuplicates: ${countDuplicate}\nEmpty/skipped: ${countEmpty}\nUncertain: ${countUncertain}\nBatch ID: ${batchId} (use for rollback if needed)\n`);
+}
+
 export async function ingestCommand(args: string[]): Promise<void> {
   const sub = args[0];
   const parsed = parseArgs(args.slice(1));
   const source = parsed.values.source ?? "all";
 
+  if (sub === "verbatim") {
+    await ingestVerbatimCommand(args.slice(1));
+    return;
+  }
+
   if (sub !== "run") {
     heading("Ingest Commands\n");
     console.log("usage: bun muavin ingest run --source <files|email|apple-notes|apple-reminders|all>");
+    console.log("       bun muavin ingest verbatim <directory-path> [--dry-run] [--delay <ms>]");
     return;
   }
 
