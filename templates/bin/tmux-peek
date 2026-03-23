@@ -1,0 +1,71 @@
+#!/bin/sh
+set -eu
+
+SAFE_PATH="${MUAVIN_ORIGINAL_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+REAL_TMUX="$(PATH="$SAFE_PATH" /usr/bin/which tmux 2>/dev/null || true)"
+
+if [ -z "$REAL_TMUX" ] || [ "$REAL_TMUX" = "$0" ]; then
+  echo "muavin guard: real tmux binary not found" >&2
+  exit 127
+fi
+
+usage() {
+  echo "Usage: tmux-peek <session-or-pane> [lines]" >&2
+  exit 64
+}
+
+[ $# -ge 1 ] || usage
+
+target="$1"
+lines="${2:-80}"
+
+case "$lines" in
+  ''|*[!0-9]*)
+    echo "tmux-peek: lines must be a positive integer" >&2
+    exit 64
+    ;;
+esac
+
+if [ "$lines" -lt 1 ]; then
+  echo "tmux-peek: lines must be >= 1" >&2
+  exit 64
+fi
+
+if [ "$lines" -gt 400 ]; then
+  lines=400
+fi
+
+resolve_pane() {
+  case "$1" in
+    %*)
+      pane_id="$1"
+      session_name="$("$REAL_TMUX" display-message -p -t "$pane_id" "#{session_name}" 2>/dev/null || true)"
+      [ -n "$session_name" ] || return 1
+      printf "%s\t%s\n" "$session_name" "$pane_id"
+      ;;
+    *)
+      session_name="$1"
+      pane_id="$("$REAL_TMUX" display-message -p -t "$session_name" "#{pane_id}" 2>/dev/null || true)"
+      [ -n "$pane_id" ] || return 1
+      printf "%s\t%s\n" "$session_name" "$pane_id"
+      ;;
+  esac
+}
+
+resolved="$(resolve_pane "$target" || true)"
+[ -n "$resolved" ] || {
+  echo "tmux-peek: target not found: $target" >&2
+  exit 1
+}
+
+session_name="$(printf "%s" "$resolved" | cut -f1)"
+pane_id="$(printf "%s" "$resolved" | cut -f2)"
+command="$("$REAL_TMUX" display-message -p -t "$pane_id" "#{pane_current_command}" 2>/dev/null || true)"
+title="$("$REAL_TMUX" display-message -p -t "$pane_id" "#{pane_title}" 2>/dev/null || true)"
+
+printf "SESSION: %s\n" "$session_name"
+printf "PANE: %s\n" "$pane_id"
+printf "COMMAND: %s\n" "$command"
+printf "TITLE: %s\n" "$title"
+printf -- "---\n"
+"$REAL_TMUX" capture-pane -p -t "$pane_id" -S "-$lines"

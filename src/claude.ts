@@ -5,6 +5,7 @@ import { join } from "path";
 
 const ALLOWED_MODELS = ["sonnet", "opus", "haiku"];
 const KILL_GRACE_MS = 2000;
+const OUTPUT_EXCERPT_LIMIT = 280;
 
 export const activeChildPids = new Set<number>();
 
@@ -24,6 +25,18 @@ function loadModelFromConfig(): string | null {
 
 const configModel = loadModelFromConfig();
 
+function formatTimeout(timeoutMs: number): string {
+  const totalSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+  return parts.join(" ");
+}
+
 export interface ClaudeResult {
   text: string;
   sessionId: string;
@@ -32,7 +45,7 @@ export interface ClaudeResult {
   structuredOutput?: unknown;
 }
 
-export async function callClaude(prompt: string, opts?: {
+export interface ClaudeCallOptions {
   resume?: string;
   appendSystemPrompt?: string;
   noSessionPersistence?: boolean;
@@ -42,7 +55,115 @@ export async function callClaude(prompt: string, opts?: {
   disallowedTools?: string[];
   model?: string;
   jsonSchema?: object;
-}): Promise<ClaudeResult> {
+}
+
+type ClaudeReadable = ReadableStream<Uint8Array<ArrayBufferLike>>;
+
+export interface ClaudeSpawnedProcess {
+  stdout: ClaudeReadable;
+  stderr: ClaudeReadable;
+  stdin: {
+    write(chunk: string): void;
+    end(): void;
+  };
+  exited: Promise<number>;
+  pid?: number;
+  kill(signal?: string): void;
+}
+
+interface ClaudeSpawnOptions {
+  stdout: "pipe";
+  stderr: "pipe";
+  stdin: "pipe";
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+}
+
+export type ClaudeSpawn = (
+  args: string[],
+  opts: ClaudeSpawnOptions,
+) => ClaudeSpawnedProcess;
+
+export class ClaudeProcessError extends Error {
+  readonly exitCode: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly cwd: string;
+  readonly args: string[];
+  readonly timedOut: boolean;
+  readonly model: string | null;
+
+  constructor(input: {
+    message: string;
+    exitCode: number | null;
+    stdout: string;
+    stderr: string;
+    cwd: string;
+    args: string[];
+    timedOut: boolean;
+    model: string | null;
+  }) {
+    super(input.message);
+    this.name = "ClaudeProcessError";
+    this.exitCode = input.exitCode;
+    this.stdout = input.stdout;
+    this.stderr = input.stderr;
+    this.cwd = input.cwd;
+    this.args = input.args;
+    this.timedOut = input.timedOut;
+    this.model = input.model;
+  }
+}
+
+function excerptOutput(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  if (normalized.length <= OUTPUT_EXCERPT_LIMIT) return normalized;
+  return `${normalized.slice(0, OUTPUT_EXCERPT_LIMIT)}...`;
+}
+
+function createClaudeProcessError(input: {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  cwd: string;
+  args: string[];
+  timedOut: boolean;
+  timeoutMs?: number;
+  model: string | null;
+  parseError?: unknown;
+}): ClaudeProcessError {
+  const details: string[] = [`cwd=${input.cwd}`];
+  if (input.model) details.push(`model=${input.model}`);
+  const stdoutExcerpt = excerptOutput(input.stdout);
+  const stderrExcerpt = excerptOutput(input.stderr);
+
+  if (stderrExcerpt) details.push(`stderr=${stderrExcerpt}`);
+  else if (stdoutExcerpt) details.push(`stdout=${stdoutExcerpt}`);
+
+  let message: string;
+  if (input.timedOut) {
+    message = `Claude timed out after ${formatTimeout(input.timeoutMs ?? 0)}`;
+  } else if (input.parseError) {
+    const parseMsg = input.parseError instanceof Error ? input.parseError.message : String(input.parseError);
+    message = `Claude returned invalid JSON: ${parseMsg}`;
+  } else {
+    message = `Claude exited ${input.exitCode ?? "unknown"}`;
+  }
+
+  return new ClaudeProcessError({
+    message: `${message} (${details.join(", ")})`,
+    exitCode: input.exitCode,
+    stdout: input.stdout,
+    stderr: input.stderr,
+    cwd: input.cwd,
+    args: input.args,
+    timedOut: input.timedOut,
+    model: input.model,
+  });
+}
+
+function buildClaudeArgs(opts?: ClaudeCallOptions): { args: string[]; effectiveModel: string | null } {
   const args = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"];
 
   const effectiveModel = (opts?.model && ALLOWED_MODELS.includes(opts.model))
@@ -56,13 +177,40 @@ export async function callClaude(prompt: string, opts?: {
   if (opts?.maxTurns) args.push("--max-turns", String(opts.maxTurns));
   if (opts?.disallowedTools?.length) args.push("--disallowed-tools", ...opts.disallowedTools);
   if (opts?.jsonSchema) args.push("--json-schema", JSON.stringify(opts.jsonSchema));
+  return { args, effectiveModel };
+}
 
-  const proc = spawn(args, {
+function safeKill(proc: ClaudeSpawnedProcess, signal: "SIGTERM" | "SIGKILL"): void {
+  try {
+    proc.kill(signal);
+  } catch {}
+}
+
+const defaultClaudeSpawn: ClaudeSpawn = (args, opts) => {
+  const proc = spawn(args, opts);
+  return {
+    stdout: proc.stdout as ClaudeReadable,
+    stderr: proc.stderr as ClaudeReadable,
+    stdin: proc.stdin as ClaudeSpawnedProcess["stdin"],
+    exited: proc.exited,
+    pid: proc.pid,
+    kill: (signal?: string) => proc.kill(signal as any),
+  };
+};
+
+export async function callClaudeWithSpawn(
+  prompt: string,
+  opts?: ClaudeCallOptions,
+  spawnImpl: ClaudeSpawn = defaultClaudeSpawn,
+): Promise<ClaudeResult> {
+  const { args, effectiveModel } = buildClaudeArgs(opts);
+  const cwd = opts?.cwd ?? join(homedir(), ".muavin");
+  const proc = spawnImpl(args, {
     stdout: "pipe",
     stderr: "pipe",
     stdin: "pipe",
     env: { ...process.env },
-    cwd: opts?.cwd ?? join(homedir(), ".muavin"),
+    cwd,
   });
 
   if (proc.pid) activeChildPids.add(proc.pid);
@@ -70,60 +218,99 @@ export async function callClaude(prompt: string, opts?: {
   proc.stdin.write(prompt);
   proc.stdin.end();
 
-  const processPromise = (async () => {
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
+  return await new Promise<ClaudeResult>((resolve, reject) => {
+    let settled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
-    if (proc.pid) activeChildPids.delete(proc.pid);
-
-    if (exitCode !== 0) {
-      throw new Error(`Claude exited ${exitCode}: ${stderr}`);
-    }
-
-    let parsed;
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (e) {
-      console.error("JSON parse failed:", e);
-      throw e;
-    }
-
-    const result = {
-      text: parsed.result || "",
-      sessionId: parsed.session_id ?? "",
-      costUsd: parsed.total_cost_usd ?? 0,
-      durationMs: parsed.duration_ms ?? 0,
-      structuredOutput: parsed.structured_output,
+    const finalize = () => {
+      if (settled) return false;
+      settled = true;
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = null;
+      }
+      if (proc.pid) activeChildPids.delete(proc.pid);
+      return true;
     };
 
-    return result;
-  })();
+    (async () => {
+      const stdout = await new Response(proc.stdout as BodyInit).text();
+      const stderr = await new Response(proc.stderr as BodyInit).text();
+      const exitCode = await proc.exited;
 
-  if (opts?.timeoutMs) {
-    const timeoutPromise = new Promise<never>((_, reject) => {
+      if (exitCode !== 0) {
+        throw createClaudeProcessError({
+          exitCode,
+          stdout,
+          stderr,
+          cwd,
+          args,
+          timedOut: false,
+          model: effectiveModel,
+        });
+      }
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(stdout);
+      } catch (parseError) {
+        throw createClaudeProcessError({
+          exitCode,
+          stdout,
+          stderr,
+          cwd,
+          args,
+          timedOut: false,
+          model: effectiveModel,
+          parseError,
+        });
+      }
+
+      return {
+        text: parsed.result || "",
+        sessionId: parsed.session_id ?? "",
+        costUsd: parsed.total_cost_usd ?? 0,
+        durationMs: parsed.duration_ms ?? 0,
+        structuredOutput: parsed.structured_output,
+      } satisfies ClaudeResult;
+    })().then(
+      (result) => {
+        if (!finalize()) return;
+        resolve(result);
+      },
+      (error) => {
+        if (!finalize()) return;
+        reject(error);
+      },
+    );
+
+    if (!opts?.timeoutMs) return;
+
+    timeoutHandle = setTimeout(() => {
+      if (!finalize()) return;
+      safeKill(proc, "SIGTERM");
       setTimeout(() => {
-        proc.kill("SIGTERM");
-        setTimeout(() => {
-          if (proc.pid && activeChildPids.has(proc.pid)) {
-            proc.kill("SIGKILL");
-            activeChildPids.delete(proc.pid);
-          }
-        }, KILL_GRACE_MS);
-        if (proc.pid) activeChildPids.delete(proc.pid);
-        const hours = Math.floor(opts.timeoutMs! / 3600000);
-        const minutes = Math.floor((opts.timeoutMs! % 3600000) / 60000);
-        const parts = [];
-        if (hours > 0) parts.push(`${hours}h`);
-        if (minutes > 0) parts.push(`${minutes}m`);
-        reject(new Error(`Claude timed out after ${parts.join(" ")}`));
-      }, opts.timeoutMs);
-    });
+        if (proc.pid && activeChildPids.has(proc.pid)) {
+          safeKill(proc, "SIGKILL");
+          activeChildPids.delete(proc.pid);
+        }
+      }, KILL_GRACE_MS);
+      reject(createClaudeProcessError({
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        cwd,
+        args,
+        timedOut: true,
+        timeoutMs: opts.timeoutMs,
+        model: effectiveModel,
+      }));
+    }, opts.timeoutMs);
+  });
+}
 
-    return Promise.race([processPromise, timeoutPromise]);
-  }
-
-  return processPromise;
+export async function callClaude(prompt: string, opts?: ClaudeCallOptions): Promise<ClaudeResult> {
+  return await callClaudeWithSpawn(prompt, opts, defaultClaudeSpawn);
 }
 
 export async function waitForChildren(timeoutMs: number): Promise<boolean> {

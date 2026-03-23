@@ -540,7 +540,7 @@ async function ensurePersonEntity(name: string, confidence: number): Promise<Ent
   };
 }
 
-async function insertLink(input: {
+export async function insertLink(input: {
   fromType: "user_block" | "mua_block" | "entity" | "artifact";
   fromId: string;
   toType: "user_block" | "mua_block" | "entity" | "artifact";
@@ -1476,6 +1476,16 @@ async function getPendingUserBlocks(limit: number): Promise<PendingUserBlockRow[
     .in("id", ids);
   if (error || !data) return [];
 
+  const foundIds = new Set((data as Array<Record<string, unknown>>).map((row) => String(row.id)));
+  const missingIds = ids.filter((id) => !foundIds.has(id));
+  if (missingIds.length > 0) {
+    await supabase
+      .from("processing_state")
+      .delete()
+      .eq("subject_type", "user_block")
+      .in("subject_id", missingIds);
+  }
+
   return (data as Array<Record<string, unknown>>).map((row) => ({
     id: String(row.id),
     content: String(row.content ?? ""),
@@ -1507,6 +1517,16 @@ async function getPendingArtifacts(limit: number): Promise<PendingArtifactRow[]>
     .select("id, source_type, title, mime_type, text_content, object_key, metadata, ingest_status")
     .in("id", ids);
   if (error || !data) return [];
+
+  const foundIds = new Set((data as Array<Record<string, unknown>>).map((row) => String(row.id)));
+  const missingIds = ids.filter((id) => !foundIds.has(id));
+  if (missingIds.length > 0) {
+    await supabase
+      .from("processing_state")
+      .delete()
+      .eq("subject_type", "artifact")
+      .in("subject_id", missingIds);
+  }
 
   return (data as Array<Record<string, unknown>>).map((row) => ({
     id: String(row.id),

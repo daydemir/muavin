@@ -9,10 +9,11 @@ import { buildContext, createAgent, listAgents, updateAgent, type AgentFile } fr
 import { syncJobPlists } from "./jobs";
 import { acquireLock, releaseLock, loadConfig, MUAVIN_DIR, saveJson, loadJson, writeOutbox, readOutbox, clearOutboxItems, claimOutboxItems, restoreUndeliveredOutbox, timestamp, isSkipResponse, formatLocalTime, isPidAlive, formatError } from "./utils";
 import { sendAndLog, toTelegramMarkdown } from "./telegram";
-import { createMuaBlock, createUserBlock, ingestFileArtifactFromPath } from "./blocks";
+import { createMuaBlock, createUserBlock, ingestFileArtifactFromPath, insertLink } from "./blocks";
 import { logSystemEvent } from "./events";
 import { runLLM, type LlmTask } from "./llm";
 import { runBackgroundPrompt } from "./background-llm";
+import { analyzeImageWithAnthropic } from "./anthropic-vision";
 
 validateEnv();
 
@@ -331,18 +332,20 @@ async function processUserMessage(item: QueuedUserMessage): Promise<void> {
   }, TYPING_INTERVAL_MS);
 
   try {
-    await logUserTelegramBlock(ctx, inboundContent, {
-      sourceRef,
-      metadata,
-    }).catch(async (persistError) => {
-      await logSystemEvent({
-        level: "error",
-        component: "relay",
-        eventType: "inbound_block_persist_failed",
-        message: formatError(persistError),
-        payload: { prompt: inboundContent.slice(0, 300), chat_id: ctx.chat?.id ?? null },
-      }).catch(() => {});
-    });
+    if (!metadata?.block_already_persisted) {
+      await logUserTelegramBlock(ctx, inboundContent, {
+        sourceRef,
+        metadata,
+      }).catch(async (persistError) => {
+        await logSystemEvent({
+          level: "error",
+          component: "relay",
+          eventType: "inbound_block_persist_failed",
+          message: formatError(persistError),
+          payload: { prompt: inboundContent.slice(0, 300), chat_id: ctx.chat?.id ?? null },
+        }).catch(() => {});
+      });
+    }
 
     const { fullPrompt, chatId: numericChatId } = buildTelegramConversationPrompt(ctx, prompt);
 
@@ -646,6 +649,25 @@ async function checkRunningAgents(): Promise<void> {
   }
 }
 
+async function recoverOrphanedAgentsOnStartup(): Promise<void> {
+  try {
+    const running = await listAgents({ status: "running" });
+    for (const agent of running) {
+      if (!agent.pid || agent.pid === process.pid || isPidAlive(agent.pid)) continue;
+      console.log(timestamp("relay"), `Recovering orphaned agent ${agent.id} from dead pid ${agent.pid}`);
+      await updateAgent(agent.id, {
+        status: "pending",
+        startedAt: undefined,
+        lastStatusAt: undefined,
+        pid: undefined,
+        error: undefined,
+      }, agent._filename);
+    }
+  } catch (error) {
+    console.error(timestamp("relay"), "recoverOrphanedAgentsOnStartup error:", error);
+  }
+}
+
 // ── Outbox watcher ──────────────────────────────────────────
 
 let outboxDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -684,6 +706,8 @@ const outboxCheckInterval = setInterval(() => {
 }, CHECK_INTERVAL_MS);
 
 // Check pending agents once at startup
+await recoverOrphanedAgentsOnStartup();
+runningAgentCount = (await listAgents({ status: "running" })).length;
 checkPendingAgents().catch(e => console.error("checkPendingAgents error:", e));
 
 // ── Bot setup ───────────────────────────────────────────────
@@ -772,6 +796,8 @@ bot.on("message:photo", async (ctx) => {
     await writeFile(filePath, Buffer.from(await res.arrayBuffer()));
 
     const caption = (ctx.message.caption || "").trim();
+
+    // 1. Upload to R2 + create artifact
     const artifact = await ingestFileArtifactFromPath({
       filePath,
       sourceType: "file",
@@ -783,20 +809,77 @@ bot.on("message:photo", async (ctx) => {
       },
     });
 
+    // 2. Create user_block for the inbound photo
     const inboundContent = caption
       ? `shared a photo. ${caption}`
       : "shared a photo.";
-    const prompt = caption
-      ? `I shared a photo (${artifact.artifactId}). ${caption}`
-      : `I shared a photo (${artifact.artifactId}).`;
 
-    await handleMessage(ctx, prompt, {
+    await createUserBlock({
+      rawContent: inboundContent,
+      source: "chat",
+      sourceRef: {
+        ...telegramSourceRef(ctx),
+        artifact_id: artifact.artifactId,
+      },
+      metadata: {
+        ...telegramMetadata(ctx, "inbound"),
+        attachment_type: "photo",
+        artifact_id: artifact.artifactId,
+      },
+    });
+
+    // 3. Run vision analysis
+    const visionPrompt = caption
+      ? `Describe this image concisely. The user's caption: "${caption}"`
+      : "Describe this image concisely.";
+
+    const visionDescription = await analyzeImageWithAnthropic({
+      imagePath: filePath,
+      mediaType: "image/jpeg",
+      prompt: visionPrompt,
+    });
+
+    // 4. Create mua_block with vision description
+    const visionBlock = await createMuaBlock({
+      content: visionDescription,
+      source: "system",
+      sourceRef: telegramSourceRef(ctx),
+      metadata: {
+        kind: "vision_description",
+        artifact_id: artifact.artifactId,
+      },
+      blockKind: "note",
+      confidence: 0.9,
+    });
+
+    // 5. Link mua_block → artifact
+    await insertLink({
+      fromType: "mua_block",
+      fromId: visionBlock.id,
+      toType: "artifact",
+      toId: artifact.artifactId,
+      linkType: "derived_from",
+      confidence: 0.95,
+      metadata: { trigger: "photo_vision_analysis" },
+    });
+
+    // 6. Pass to conductor with vision description
+    const conductorPrompt = caption
+      ? `I sent a photo. Vision description: ${visionDescription}\nMy caption: ${caption}`
+      : `I sent a photo. Vision description: ${visionDescription}`;
+
+    await handleMessage(ctx, conductorPrompt, {
       inboundContent,
       sourceRef: {
         ...telegramSourceRef(ctx),
         artifact_id: artifact.artifactId,
       },
-      metadata: { attachment_type: "photo", artifact_id: artifact.artifactId },
+      metadata: {
+        attachment_type: "photo",
+        artifact_id: artifact.artifactId,
+        vision_block_id: visionBlock.id,
+        block_already_persisted: true,
+      },
     });
   } catch (error) {
     console.error("Photo error:", error);

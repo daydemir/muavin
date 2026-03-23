@@ -159,6 +159,19 @@ CREATE TABLE IF NOT EXISTS embedding_queue (
   UNIQUE(block_type, block_id, profile_id)
 );
 
+ALTER TABLE public.user_blocks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_block_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.mua_blocks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.entities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.artifacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.clarification_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.processing_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.system_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.embedding_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.block_embeddings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.embedding_queue ENABLE ROW LEVEL SECURITY;
+
 INSERT INTO embedding_profiles (id, provider, model, dimensions, is_active, metadata)
 VALUES ('default-512', 'openai', 'text-embedding-3-small', 512, TRUE, '{}'::jsonb)
 ON CONFLICT (id) DO UPDATE
@@ -227,6 +240,8 @@ SELECT
   confidence
 FROM mua_blocks;
 
+ALTER VIEW public.all_blocks_v SET (security_invoker = true);
+
 CREATE OR REPLACE FUNCTION search_all_blocks(
   query_embedding VECTOR(512),
   profile_id TEXT DEFAULT NULL,
@@ -249,7 +264,7 @@ AS $$
   WITH active_profile AS (
     SELECT COALESCE(
       profile_id,
-      (SELECT ep.id FROM embedding_profiles ep WHERE ep.is_active = TRUE ORDER BY ep.updated_at DESC LIMIT 1),
+      (SELECT ep.id FROM public.embedding_profiles ep WHERE ep.is_active = TRUE ORDER BY ep.updated_at DESC LIMIT 1),
       'default-512'
     ) AS id
   )
@@ -262,9 +277,9 @@ AS $$
     b.block_kind,
     1 - (e.embedding <=> query_embedding) AS similarity,
     b.created_at
-  FROM all_blocks_v b
+  FROM public.all_blocks_v b
   JOIN active_profile ap ON TRUE
-  JOIN block_embeddings e
+  JOIN public.block_embeddings e
     ON e.block_id = b.id
    AND e.block_type = b.author_type
    AND e.profile_id = ap.id
@@ -272,6 +287,27 @@ AS $$
     AND 1 - (e.embedding <=> query_embedding) > match_threshold
   ORDER BY similarity DESC, b.created_at DESC
   LIMIT match_count;
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE
+SET search_path = public, pg_temp;
+
+REVOKE ALL ON TABLE public.user_blocks FROM anon, authenticated;
+REVOKE ALL ON TABLE public.user_block_versions FROM anon, authenticated;
+REVOKE ALL ON TABLE public.mua_blocks FROM anon, authenticated;
+REVOKE ALL ON TABLE public.entities FROM anon, authenticated;
+REVOKE ALL ON TABLE public.artifacts FROM anon, authenticated;
+REVOKE ALL ON TABLE public.links FROM anon, authenticated;
+REVOKE ALL ON TABLE public.clarification_queue FROM anon, authenticated;
+REVOKE ALL ON TABLE public.processing_state FROM anon, authenticated;
+REVOKE ALL ON TABLE public.system_events FROM anon, authenticated;
+REVOKE ALL ON TABLE public.embedding_profiles FROM anon, authenticated;
+REVOKE ALL ON TABLE public.block_embeddings FROM anon, authenticated;
+REVOKE ALL ON TABLE public.embedding_queue FROM anon, authenticated;
+
+REVOKE ALL ON TABLE public.all_blocks_v FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.search_all_blocks(vector, text, boolean, boolean, double precision, integer) FROM PUBLIC, anon, authenticated;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated;
 
 COMMIT;

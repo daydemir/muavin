@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+SAFE_PATH="${MUAVIN_ORIGINAL_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+REAL_TMUX="$(PATH="$SAFE_PATH" /usr/bin/which tmux 2>/dev/null || true)"
+
+if [ -z "$REAL_TMUX" ] || [ "$REAL_TMUX" = "$0" ]; then
+  echo "muavin guard: real tmux binary not found" >&2
+  exit 127
+fi
+
+if ! "$REAL_TMUX" list-sessions >/dev/null 2>&1; then
+  echo "No tmux sessions."
+  exit 0
+fi
+
+printf "SESSION\tWINDOW\tPANE\tPANE_ID\tCOMMAND\tTITLE\tSTATUS\n"
+"$REAL_TMUX" list-panes -a -F "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}"

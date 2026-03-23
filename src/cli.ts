@@ -893,7 +893,13 @@ async function installTemplates() {
   ok(`Installed prompts/ (${promptFiles.length} files)`);
 
   // Install guarded wrapper binaries (always overwrite)
-  const binFiles = ["osascript", "remindctl"];
+  const binFiles = [
+    "osascript",
+    "remindctl",
+    "tmux-sessions",
+    "tmux-peek",
+    "tmux-send",
+  ];
   for (const binFile of binFiles) {
     try {
       const targetPath = `${binDir}/${binFile}`;
@@ -1560,7 +1566,6 @@ async function statusCommand() {
           .filter(l => l.includes("ai.muavin.job."))
           .map(l => l.trim().split(/\s+/).pop()!)
       );
-
       for (const job of allJobs) {
         const lastRun = jobState[job.id];
         const lastStr = lastRun ? timeAgo(lastRun) : "never";
@@ -1703,7 +1708,12 @@ async function agentCommand() {
   }
 
   const { createAgent } = await import("./agents");
-  const agent = await createAgent({ task, prompt: agentPrompt, chatId, ...(model && { model }) });
+  const agent = await createAgent({
+    task,
+    prompt: agentPrompt,
+    chatId,
+    ...(model && { model }),
+  });
   ok(`Created agent ${agent.id}: ${agent.task}`);
   dim("  Relay will pick it up automatically");
 }

@@ -350,6 +350,7 @@ async function main() {
         maxTurns: 1,
         cwd: systemCwd,
         timeoutMs: 120000,
+        model: "haiku",
       });
 
       if (isSkipResponse(result.text)) {
@@ -366,7 +367,6 @@ async function main() {
           if (relayDown) {
             // Relay is down — send directly via Telegram
             await sendTelegram(config.owner, result.text);
-            console.log("Alert sent directly (relay is down)");
           } else {
             // Relay is up — write to outbox for voice processing
             await writeOutbox({
@@ -376,7 +376,6 @@ async function main() {
               chatId: config.owner,
               createdAt: new Date().toISOString(),
             });
-            console.log("Alert written to outbox");
           }
           state.lastAlertText = result.text;
           state.lastAlertAt = Date.now();
