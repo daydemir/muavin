@@ -1,5 +1,5 @@
 import pc from "picocolors";
-import { closeAction } from "./blocks";
+import { ackAction, closeAction, mergeEntities } from "./blocks";
 import { supabase } from "./db";
 import { runLLM } from "./llm";
 
@@ -25,6 +25,7 @@ interface ActionDetails {
   created_at: string;
   entityNames: string[];
   sourcePreview: string | null;
+  lastAcknowledgedAt: string | null;
 }
 
 interface EntityStats {
@@ -139,7 +140,7 @@ async function fetchMuaBlocksByIds(ids: string[]): Promise<Map<string, Record<st
 async function listActionDetails(kind: "action_open" | "action_closed", limit: number): Promise<ActionDetails[]> {
   const { data } = await supabase
     .from("mua_blocks")
-    .select("id, content, created_at")
+    .select("id, content, created_at, metadata")
     .eq("block_kind", kind)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -192,7 +193,16 @@ async function listActionDetails(kind: "action_open" | "action_closed", limit: n
     created_at: String(row.created_at ?? ""),
     entityNames: entityNamesByAction.get(String(row.id)) ?? [],
     sourcePreview: sourcePreviewByAction.get(String(row.id)) ?? null,
-  }));
+    lastAcknowledgedAt: (() => {
+      const metadata = recordOf(row.metadata);
+      return typeof metadata.last_acknowledged_at === "string" ? metadata.last_acknowledged_at : null;
+    })(),
+  })).sort((a, b) => {
+    const aUnack = a.lastAcknowledgedAt ? 1 : 0;
+    const bUnack = b.lastAcknowledgedAt ? 1 : 0;
+    if (aUnack !== bUnack) return aUnack - bUnack;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
 }
 
 async function loadEntityStats(): Promise<EntityStats[]> {
@@ -326,10 +336,10 @@ async function reviewActionBatch(batch: ActionDetails[]): Promise<CleanupClassif
 
 export async function boardOverviewCommand(): Promise<void> {
   const weekAgo = new Date(Date.now() - (7 * 24 * 60 * 60 * 1000)).toISOString();
-  const [userCount, noteCount, openCount, closedCount, userThisWeek, muaThisWeek, actions, entityStats, clarifications] = await Promise.all([
+  const [userCount, noteCount, openActions, closedCount, userThisWeek, muaThisWeek, actions, entityStats, clarifications] = await Promise.all([
     supabase.from("user_blocks").select("*", { count: "exact", head: true }),
     supabase.from("mua_blocks").select("*", { count: "exact", head: true }).eq("block_kind", "note"),
-    supabase.from("mua_blocks").select("*", { count: "exact", head: true }).eq("block_kind", "action_open"),
+    supabase.from("mua_blocks").select("id, metadata").eq("block_kind", "action_open"),
     supabase.from("mua_blocks").select("*", { count: "exact", head: true }).eq("block_kind", "action_closed"),
     supabase.from("user_blocks").select("*", { count: "exact", head: true }).gte("created_at", weekAgo),
     supabase.from("mua_blocks").select("*", { count: "exact", head: true }).gte("created_at", weekAgo),
@@ -339,7 +349,10 @@ export async function boardOverviewCommand(): Promise<void> {
   ]);
 
   const noteTotal = noteCount.count ?? 0;
-  const openTotal = openCount.count ?? 0;
+  const openTotal = (openActions.data ?? []).length;
+  const unacknowledgedTotal = ((openActions.data ?? []) as Array<Record<string, unknown>>)
+    .filter((row) => typeof recordOf(row.metadata).last_acknowledged_at !== "string")
+    .length;
   const closedTotal = closedCount.count ?? 0;
   const muaTotal = noteTotal + openTotal + closedTotal;
   const weekTotal = (userThisWeek.count ?? 0) + (muaThisWeek.count ?? 0);
@@ -352,6 +365,7 @@ export async function boardOverviewCommand(): Promise<void> {
   console.log("Blocks");
   console.log(`  user: ${userCount.count ?? 0}  mua: ${muaTotal} (note=${noteTotal} action_open=${openTotal} action_closed=${closedTotal})`);
   console.log(`  this week: ${weekTotal} blocks`);
+  console.log(`  unacknowledged open actions: ${unacknowledgedTotal}`);
   console.log();
 
   console.log("Open Actions (top 5)");
@@ -393,6 +407,9 @@ export async function boardActionsCommand(args: string[]): Promise<void> {
     console.log(`${idx + 1}. [${formatDate(row.created_at)}] ${truncate(row.content, 120)}`);
     console.log(`   entities=${row.entityNames.length > 0 ? row.entityNames.join(", ") : "none"}`);
     console.log(`   source=${row.sourcePreview ?? "none"}`);
+    if (row.lastAcknowledgedAt) {
+      console.log(`   acknowledged=${row.lastAcknowledgedAt}`);
+    }
   });
 }
 
@@ -605,7 +622,7 @@ export async function boardCleanupActionsCommand(): Promise<void> {
       }
 
       if (decision.classification === "STALE") {
-        await closeAction(action.id);
+        await closeAction(action.id, { closedReason: "archived" });
         closed += 1;
         continue;
       }
@@ -615,7 +632,7 @@ export async function boardCleanupActionsCommand(): Promise<void> {
           errored += 1;
           continue;
         }
-        await closeAction(action.id);
+        await closeAction(action.id, { closedReason: "duplicate" });
         deduped += 1;
       }
     }
@@ -628,6 +645,40 @@ export async function boardCleanupActionsCommand(): Promise<void> {
   console.log(`closed=${closed}`);
   console.log(`deduped=${deduped}`);
   console.log(`errored=${errored}`);
+}
+
+export async function boardAckCommand(args: string[]): Promise<void> {
+  const blockId = args.find((arg) => !arg.startsWith("--")) ?? "";
+  if (!blockId) {
+    warn("usage: bun muavin board ack <block_id>");
+    return;
+  }
+  await ackAction(blockId);
+  console.log(`acknowledged ${blockId}`);
+}
+
+export async function boardMergeCommand(args: string[]): Promise<void> {
+  const entityArgs = args.filter((arg) => !arg.startsWith("--"));
+  const keepName = entityArgs[0] ?? "";
+  const mergeName = entityArgs[1] ?? "";
+  if (!keepName || !mergeName) {
+    warn('usage: bun muavin board merge "<entity1>" "<entity2>"');
+    return;
+  }
+
+  const keepResolved = await resolveEntityByName(keepName);
+  const mergeResolved = await resolveEntityByName(mergeName);
+  if (!keepResolved.entity || keepResolved.matches.length > 1) {
+    warn(`could not resolve merge target: ${keepName}`);
+    return;
+  }
+  if (!mergeResolved.entity || mergeResolved.matches.length > 1) {
+    warn(`could not resolve merge source: ${mergeName}`);
+    return;
+  }
+
+  await mergeEntities(keepResolved.entity.id, mergeResolved.entity.id);
+  console.log(`merged ${mergeResolved.entity.name} into ${keepResolved.entity.name}`);
 }
 
 export async function boardCommand(args: string[]): Promise<void> {
@@ -650,6 +701,12 @@ export async function boardCommand(args: string[]): Promise<void> {
     case "cleanup-actions":
       await boardCleanupActionsCommand();
       break;
+    case "ack":
+      await boardAckCommand(rest);
+      break;
+    case "merge":
+      await boardMergeCommand(rest);
+      break;
     default:
       heading("Board Commands\n");
       console.log("usage:");
@@ -657,6 +714,8 @@ export async function boardCommand(args: string[]): Promise<void> {
       console.log("  bun muavin board actions [--closed] [--limit N]");
       console.log("  bun muavin board entities [--limit N]");
       console.log('  bun muavin board entity "<name>" [--limit N]');
+      console.log("  bun muavin board ack <block_id>");
+      console.log('  bun muavin board merge "<entity1>" "<entity2>"');
       console.log("  bun muavin board cleanup-actions");
   }
 }

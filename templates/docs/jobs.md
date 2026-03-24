@@ -23,6 +23,9 @@ Jobs have a `type` field:
 
 Built-in system jobs in the block-based alpha:
 - `state-processor` — every 5 minutes, processes pending user blocks/artifacts via Claude, updates MUA blocks/entities/links
+- `board-hourly-review` — hourly review for tag discovery, missed entity links, alias updates, and merge candidates
+- `board-daily-review` — daily review for entity merges, tag refinement, new related links, and link-label enrichment
+- `board-weekly-review` — weekly review for pruning, stale-action surfacing, cleanup, and graph observations
 - `files-ingest` — scans `filesInboxDir`, uploads to R2, extracts text/transcripts, and queues artifacts for processor analysis
 - `agent-cleanup` — removes old completed/failed agent files and old upload temp files
 - `clarification-digest` — sends pending clarification questions for low-confidence entity resolution

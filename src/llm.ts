@@ -11,7 +11,10 @@ export type LlmTask =
   | "block_processor"
   | "artifact_processor"
   | "heartbeat_triage"
-  | "board_cleanup_actions";
+  | "board_cleanup_actions"
+  | "board_hourly_review"
+  | "board_daily_review"
+  | "board_weekly_review";
 
 export const TASK_ROLE: Record<LlmTask, LlmRole> = {
   telegram_conversation: "conductor",
@@ -22,6 +25,9 @@ export const TASK_ROLE: Record<LlmTask, LlmRole> = {
   artifact_processor: "worker",
   heartbeat_triage: "worker",
   board_cleanup_actions: "worker",
+  board_hourly_review: "worker",
+  board_daily_review: "worker",
+  board_weekly_review: "worker",
 };
 
 export type LlmToolPolicy = "default" | "no_background_claude_shell";
@@ -65,6 +71,9 @@ const DEFAULT_EPHEMERAL_BY_TASK: Record<LlmTask, boolean> = {
   artifact_processor: true,
   heartbeat_triage: true,
   board_cleanup_actions: true,
+  board_hourly_review: true,
+  board_daily_review: true,
+  board_weekly_review: true,
 };
 
 const claudeAdapter: LlmAdapter = {

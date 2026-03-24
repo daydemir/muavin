@@ -3,7 +3,14 @@ import { join } from "path";
 import { cleanupAgents, cleanupUploads } from "./agents";
 import { MUAVIN_DIR, loadConfig, loadJson, saveJson, writeOutbox, isSkipResponse, formatLocalTime, formatError, acquireLock, releaseLock, type Config } from "./utils";
 import type { Job } from "./jobs";
-import { buildClarificationDigest, ingestFilesInbox, processPendingState } from "./blocks";
+import {
+  buildClarificationDigest,
+  ingestFilesInbox,
+  processPendingState,
+  runBoardDailyReview,
+  runBoardHourlyReview,
+  runBoardWeeklyReview,
+} from "./blocks";
 import { logSystemEvent } from "./events";
 import { runBackgroundPrompt } from "./background-llm";
 
@@ -113,6 +120,54 @@ const actions: Record<string, ActionHandler> = {
       chatId: config.owner,
       createdAt: new Date().toISOString(),
     });
+  },
+  "board-hourly-review": async (job, config) => {
+    const state = (await loadJson<JobState>(STATE_FILE)) ?? {};
+    const result = await runBoardHourlyReview({
+      jobId: job.id,
+      lastRunAt: state[job.id] ?? null,
+    });
+    await writeOutbox({
+      source: "job",
+      sourceId: job.id,
+      task: job.name || job.id,
+      result: result.summary,
+      chatId: config.owner,
+      createdAt: new Date().toISOString(),
+    });
+    console.log(`[${job.id}] ${result.summary}`);
+  },
+  "board-daily-review": async (job, config) => {
+    const state = (await loadJson<JobState>(STATE_FILE)) ?? {};
+    const result = await runBoardDailyReview({
+      jobId: job.id,
+      lastRunAt: state[job.id] ?? null,
+    });
+    await writeOutbox({
+      source: "job",
+      sourceId: job.id,
+      task: job.name || job.id,
+      result: result.summary,
+      chatId: config.owner,
+      createdAt: new Date().toISOString(),
+    });
+    console.log(`[${job.id}] ${result.summary}`);
+  },
+  "board-weekly-review": async (job, config) => {
+    const state = (await loadJson<JobState>(STATE_FILE)) ?? {};
+    const result = await runBoardWeeklyReview({
+      jobId: job.id,
+      lastRunAt: state[job.id] ?? null,
+    });
+    await writeOutbox({
+      source: "job",
+      sourceId: job.id,
+      task: job.name || job.id,
+      result: result.summary,
+      chatId: config.owner,
+      createdAt: new Date().toISOString(),
+    });
+    console.log(`[${job.id}] ${result.summary}`);
   },
 };
 

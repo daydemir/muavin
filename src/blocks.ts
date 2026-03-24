@@ -5,6 +5,14 @@ import { spawn } from "bun";
 import { embed, getActiveEmbeddingProfileId, supabase, upsertBlockEmbedding } from "./db";
 import { loadConfig } from "./utils";
 import { runLLM } from "./llm";
+import { logSystemEvent } from "./events";
+import {
+  ActionClosedMeta,
+  ActionOpenMeta,
+  type ActionClosedReason,
+  MergeCandidateMeta,
+  ReviewSourceMeta,
+} from "./metadata-schemas";
 
 export type BlockVisibility = "private" | "public";
 export type BlockSource =
@@ -70,10 +78,15 @@ interface ProcessorMuaBlockDraft {
   block_kind?: "note" | "action_open" | "action_closed";
 }
 
+interface RelatedBlockDraft {
+  id: string;
+  label?: string;
+}
+
 interface BlockProcessResult {
   analysis: string;
   mua_blocks: ProcessorMuaBlockDraft[];
-  related_block_ids: string[];
+  related_blocks: RelatedBlockDraft[];
   entity_names: string[];
 }
 
@@ -81,6 +94,99 @@ interface ArtifactProcessResult {
   description: string;
   mua_blocks: ProcessorMuaBlockDraft[];
   entity_names: string[];
+}
+
+interface ReviewTagDraft {
+  name: string;
+}
+
+interface ReviewMissedLinkDraft {
+  block_id: string;
+  block_type: "user_block" | "mua_block";
+  entity_name: string;
+  label?: string;
+}
+
+interface ReviewAliasUpdateDraft {
+  entity_id: string;
+  new_alias: string;
+}
+
+interface ReviewMergeCandidateDraft {
+  entity_id_keep: string;
+  entity_id_merge: string;
+  reason: string;
+}
+
+interface DailyMergeDraft {
+  keep_id: string;
+  merge_id: string;
+}
+
+interface DailyTagOpDraft {
+  op: "rename" | "merge";
+  entity_id: string;
+  new_name?: string;
+  merge_into_id?: string;
+}
+
+interface ReviewConnectionDraft {
+  from_type: "user_block" | "mua_block" | "artifact" | "entity";
+  from_id: string;
+  to_type: "user_block" | "mua_block" | "artifact" | "entity";
+  to_id: string;
+  label: string;
+}
+
+interface ReviewLabelUpdateDraft {
+  link_id: string;
+  label: string;
+}
+
+interface HourlyReviewOutput {
+  summary: string;
+  new_tags: ReviewTagDraft[];
+  missed_links: ReviewMissedLinkDraft[];
+  alias_updates: ReviewAliasUpdateDraft[];
+  merge_candidates: ReviewMergeCandidateDraft[];
+}
+
+interface DailyReviewOutput {
+  summary: string;
+  merges: DailyMergeDraft[];
+  tag_ops: DailyTagOpDraft[];
+  new_connections: ReviewConnectionDraft[];
+  label_updates: ReviewLabelUpdateDraft[];
+}
+
+interface WeeklyPruneDraft {
+  entity_id: string;
+  reason: string;
+}
+
+interface WeeklyStaleActionDraft {
+  block_id: string;
+  age_days: number;
+  suggestion: "close" | "keep" | "nudge";
+}
+
+interface WeeklyCleanupDraft {
+  type: string;
+  id: string;
+  action: string;
+  reason: string;
+}
+
+interface WeeklyReviewOutput {
+  summary: string;
+  prune: WeeklyPruneDraft[];
+  stale_actions: WeeklyStaleActionDraft[];
+  cleanup: WeeklyCleanupDraft[];
+  observations: string;
+  missed_links: ReviewMissedLinkDraft[];
+  merge_candidates: ReviewMergeCandidateDraft[];
+  new_connections: ReviewConnectionDraft[];
+  alias_updates: ReviewAliasUpdateDraft[];
 }
 
 export interface ProcessPendingStateResult {
@@ -108,6 +214,41 @@ export interface CrmPersonSummary {
   roiScore: number;
   recentTopics: string[];
   timeline: CrmTimelineItem[];
+}
+
+type ReviewSource = "state_processor" | "hourly_review" | "daily_review" | "weekly_review";
+
+interface ReviewJobResult {
+  summary: string;
+}
+
+interface HourlyReviewResult extends ReviewJobResult {
+  createdTags: number;
+  missedLinks: number;
+  aliasUpdates: number;
+  mergeCandidates: number;
+}
+
+interface DailyReviewResult extends ReviewJobResult {
+  merges: number;
+  rejectedMergeCandidates: number;
+  tagOps: number;
+  newConnections: number;
+  labelUpdates: number;
+}
+
+interface WeeklyReviewResult extends ReviewJobResult {
+  pruned: number;
+  closedActions: number;
+  nudges: number;
+  cleanupFixes: number;
+  observations: number;
+  aliasUpdates: number;
+  missedLinks: number;
+  mergeCandidates: number;
+  merges: number;
+  tagOps: number;
+  newConnections: number;
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -140,10 +281,21 @@ const BLOCK_PROCESS_SCHEMA = {
         additionalProperties: false,
       },
     },
-    related_block_ids: { type: "array", items: { type: "string" } },
+    related_blocks: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          label: { type: "string" },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    },
     entity_names: { type: "array", items: { type: "string" } },
   },
-  required: ["analysis", "mua_blocks", "related_block_ids", "entity_names"],
+  required: ["analysis", "mua_blocks", "related_blocks", "entity_names"],
   additionalProperties: false,
 } as const;
 
@@ -166,6 +318,178 @@ const ARTIFACT_PROCESS_SCHEMA = {
     entity_names: { type: "array", items: { type: "string" } },
   },
   required: ["description", "mua_blocks", "entity_names"],
+  additionalProperties: false,
+} as const;
+
+const HOURLY_REVIEW_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    new_tags: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+        additionalProperties: false,
+      },
+    },
+    missed_links: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          block_id: { type: "string" },
+          block_type: { type: "string", enum: ["user_block", "mua_block"] },
+          entity_name: { type: "string" },
+          label: { type: "string" },
+        },
+        required: ["block_id", "block_type", "entity_name"],
+        additionalProperties: false,
+      },
+    },
+    alias_updates: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          entity_id: { type: "string" },
+          new_alias: { type: "string" },
+        },
+        required: ["entity_id", "new_alias"],
+        additionalProperties: false,
+      },
+    },
+    merge_candidates: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          entity_id_keep: { type: "string" },
+          entity_id_merge: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["entity_id_keep", "entity_id_merge", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["summary", "new_tags", "missed_links", "alias_updates", "merge_candidates"],
+  additionalProperties: false,
+} as const;
+
+const DAILY_REVIEW_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    merges: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          keep_id: { type: "string" },
+          merge_id: { type: "string" },
+        },
+        required: ["keep_id", "merge_id"],
+        additionalProperties: false,
+      },
+    },
+    tag_ops: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["rename", "merge"] },
+          entity_id: { type: "string" },
+          new_name: { type: "string" },
+          merge_into_id: { type: "string" },
+        },
+        required: ["op", "entity_id"],
+        additionalProperties: false,
+      },
+    },
+    new_connections: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          from_type: { type: "string", enum: ["user_block", "mua_block", "artifact", "entity"] },
+          from_id: { type: "string" },
+          to_type: { type: "string", enum: ["user_block", "mua_block", "artifact", "entity"] },
+          to_id: { type: "string" },
+          label: { type: "string" },
+        },
+        required: ["from_type", "from_id", "to_type", "to_id", "label"],
+        additionalProperties: false,
+      },
+    },
+    label_updates: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          link_id: { type: "string" },
+          label: { type: "string" },
+        },
+        required: ["link_id", "label"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["summary", "merges", "tag_ops", "new_connections", "label_updates"],
+  additionalProperties: false,
+} as const;
+
+const WEEKLY_REVIEW_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    prune: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          entity_id: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["entity_id", "reason"],
+        additionalProperties: false,
+      },
+    },
+    stale_actions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          block_id: { type: "string" },
+          age_days: { type: "number" },
+          suggestion: { type: "string", enum: ["close", "keep", "nudge"] },
+        },
+        required: ["block_id", "age_days", "suggestion"],
+        additionalProperties: false,
+      },
+    },
+    cleanup: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          type: { type: "string" },
+          id: { type: "string" },
+          action: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["type", "id", "action", "reason"],
+        additionalProperties: false,
+      },
+    },
+    observations: { type: "string" },
+    missed_links: HOURLY_REVIEW_SCHEMA.properties.missed_links,
+    merge_candidates: HOURLY_REVIEW_SCHEMA.properties.merge_candidates,
+    new_connections: DAILY_REVIEW_SCHEMA.properties.new_connections,
+    alias_updates: HOURLY_REVIEW_SCHEMA.properties.alias_updates,
+  },
+  required: ["summary", "prune", "stale_actions", "cleanup", "observations", "missed_links", "merge_candidates", "new_connections", "alias_updates"],
   additionalProperties: false,
 } as const;
 
@@ -237,6 +561,49 @@ function parseFrontmatter(raw: string): FrontmatterParseResult {
 function metadataRecord(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) return {};
   return input as Record<string, unknown>;
+}
+
+function warnMetadataValidation(context: string, issues: string): void {
+  console.warn(`[metadata] ${context}: ${issues}`);
+}
+
+function validateMuaMetadata(
+  blockKind: "note" | "action_open" | "action_closed",
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  const baseParsed = ReviewSourceMeta.safeParse(metadata);
+  if (!baseParsed.success) {
+    warnMetadataValidation(`review-source ${blockKind}`, baseParsed.error.issues.map((issue) => issue.message).join("; "));
+  }
+
+  if (blockKind === "action_open") {
+    const parsed = ActionOpenMeta.safeParse(metadata);
+    if (!parsed.success) {
+      warnMetadataValidation("action_open", parsed.error.issues.map((issue) => issue.message).join("; "));
+      return metadata;
+    }
+    return parsed.data;
+  }
+
+  if (blockKind === "action_closed") {
+    const parsed = ActionClosedMeta.safeParse(metadata);
+    if (!parsed.success) {
+      warnMetadataValidation("action_closed", parsed.error.issues.map((issue) => issue.message).join("; "));
+      return metadata;
+    }
+    return parsed.data;
+  }
+
+  return metadata;
+}
+
+function extractLastAcknowledgedAt(metadata: Record<string, unknown>): string | null {
+  const parsed = ActionOpenMeta.safeParse(metadata);
+  if (!parsed.success) {
+    warnMetadataValidation("read action_open", parsed.error.issues.map((issue) => issue.message).join("; "));
+    return null;
+  }
+  return parsed.data.last_acknowledged_at ?? null;
 }
 
 interface SourceRefBase {
@@ -494,7 +861,7 @@ function escapeIlike(value: string): string {
   return value.replace(/[%_]/g, " ");
 }
 
-async function findPersonEntities(name: string): Promise<EntityRow[]> {
+async function findEntities(name: string): Promise<EntityRow[]> {
   const { data, error } = await supabase
     .from("entities")
     .select("id, name, aliases, created_at")
@@ -510,7 +877,7 @@ async function findPersonEntities(name: string): Promise<EntityRow[]> {
     .slice(0, 10);
 }
 
-async function findPersonEntitiesLoose(name: string): Promise<EntityRow[]> {
+async function findEntitiesLoose(name: string): Promise<EntityRow[]> {
   const lowered = name.toLowerCase();
   const { data, error } = await supabase
     .from("entities")
@@ -544,13 +911,13 @@ async function createEntityCandidate(name: string): Promise<string | null> {
   return (data as { id: string }).id;
 }
 
-async function ensurePersonEntity(name: string): Promise<EntityRow | null> {
+export async function ensureEntity(name: string): Promise<EntityRow | null> {
   const cleaned = normalizeWhitespace(name);
   if (!cleaned) return null;
 
   const normalized = normalizeEntityName(cleaned);
   const lowered = normalized.toLowerCase();
-  const matches = await findPersonEntitiesLoose(normalized);
+  const matches = await findEntitiesLoose(normalized);
   if (matches.length > 0) {
     const exact = matches.find((m) => {
       if (m.name.toLowerCase() === lowered) return true;
@@ -587,27 +954,64 @@ export async function insertLink(input: {
   toType: "user_block" | "mua_block" | "entity" | "artifact";
   toId: string;
   linkType: "about" | "derived_from" | "related";
+  label?: string;
   metadata?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<string | null> {
   const { data: existing } = await supabase
     .from("links")
-    .select("id")
+    .select("id, label")
     .eq("from_type", input.fromType)
     .eq("from_id", input.fromId)
     .eq("to_type", input.toType)
     .eq("to_id", input.toId)
     .eq("link_type", input.linkType)
     .limit(1);
-  if ((existing?.length ?? 0) > 0) return;
+  if ((existing?.length ?? 0) > 0) {
+    const existingRow = (existing ?? [])[0] as { id: string; label?: string | null } | undefined;
+    if (existingRow?.id && input.linkType === "related" && input.label && !existingRow.label) {
+      await setLinkLabel(existingRow.id, input.label);
+    }
+    return existingRow?.id ?? null;
+  }
 
-  await supabase.from("links").insert({
+  const { data, error } = await supabase.from("links").insert({
     from_type: input.fromType,
     from_id: input.fromId,
     to_type: input.toType,
     to_id: input.toId,
     link_type: input.linkType,
     metadata: input.metadata ?? {},
-  });
+  }).select("id").single();
+
+  if (error || !data) return null;
+
+  const linkId = String((data as { id: string }).id);
+  if (input.linkType === "related" && input.label) {
+    await setLinkLabel(linkId, input.label);
+  }
+  return linkId;
+}
+
+async function setLinkLabel(linkId: string, label: string): Promise<void> {
+  const normalized = normalizeWhitespace(label);
+  if (!normalized) return;
+
+  try {
+    const labelEmbedding = await embed(normalized);
+    await supabase
+      .from("links")
+      .update({
+        label: normalized,
+        label_embedding: labelEmbedding,
+      })
+      .eq("id", linkId);
+  } catch (error) {
+    console.warn(`[links] failed to embed label for ${linkId}: ${error instanceof Error ? error.message : String(error)}`);
+    await supabase
+      .from("links")
+      .update({ label: normalized })
+      .eq("id", linkId);
+  }
 }
 
 async function findExistingClarification(context: Record<string, unknown>): Promise<string | null> {
@@ -728,7 +1132,7 @@ async function maybeQueueEntityDisambiguation(blockId: string, content: string):
   const target = extractEmailTarget(content);
   if (!target) return;
 
-  const matches = await findPersonEntitiesLoose(target);
+  const matches = await findEntitiesLoose(target);
   if (matches.length === 1) {
     await insertLink({
       fromType: "user_block",
@@ -928,6 +1332,11 @@ export async function createMuaBlock(input: {
   dedupeKey?: string;
 }): Promise<BlockInsertResult> {
   if (!input.content.trim()) throw new Error("MUA block content cannot be empty");
+  const blockKind = input.blockKind ?? "note";
+  const metadataInput = metadataRecord(input.metadata);
+  const normalizedMetadata = blockKind === "action_open"
+    ? validateMuaMetadata(blockKind, metadataInput)
+    : validateMuaMetadata(blockKind, metadataInput);
   if (input.dedupeKey) {
     const { data: existing } = await supabase
       .from("mua_blocks")
@@ -948,11 +1357,11 @@ export async function createMuaBlock(input: {
     .from("mua_blocks")
     .insert({
       content: input.content,
-      block_kind: input.blockKind ?? "note",
+      block_kind: blockKind,
       visibility: input.visibility ?? "private",
       source,
       source_ref: sourceRef,
-      metadata: input.metadata ?? {},
+      metadata: normalizedMetadata,
       dedupe_key: input.dedupeKey ?? null,
     })
     .select("id")
@@ -964,14 +1373,61 @@ export async function createMuaBlock(input: {
 
   const id = (data as { id: string }).id;
   await upsertBlockEmbedding({ blockType: "mua", blockId: id, text: input.content }).catch(() => {});
-  return { id, content: input.content, metadata: input.metadata ?? {} };
+  return { id, content: input.content, metadata: normalizedMetadata };
 }
 
-export async function closeAction(blockId: string): Promise<void> {
+async function updateMuaBlockMetadata(
+  blockId: string,
+  updater: (current: Record<string, unknown>) => Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  const { data: existing, error } = await supabase
+    .from("mua_blocks")
+    .select("id, metadata")
+    .eq("id", blockId)
+    .maybeSingle();
+  if (error || !existing) return null;
+
+  const currentMetadata = metadataRecord((existing as { metadata?: unknown }).metadata);
+  const nextMetadata = updater(currentMetadata);
+  await supabase
+    .from("mua_blocks")
+    .update({
+      metadata: nextMetadata,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", blockId);
+  return nextMetadata;
+}
+
+export async function ackAction(blockId: string): Promise<void> {
+  await updateMuaBlockMetadata(blockId, (current) => {
+    const nextMetadata = {
+      ...current,
+      last_acknowledged_at: new Date().toISOString(),
+    };
+    return validateMuaMetadata("action_open", nextMetadata);
+  });
+}
+
+export async function closeAction(
+  blockId: string,
+  options?: { closedReason?: ActionClosedReason; closedAt?: string },
+): Promise<void> {
+  const closedAt = options?.closedAt ?? new Date().toISOString();
+  const nextMetadata = await updateMuaBlockMetadata(blockId, (current) => validateMuaMetadata("action_closed", {
+    ...current,
+    closed_reason: options?.closedReason,
+    closed_at: closedAt,
+  }));
+
   await supabase
     .from("mua_blocks")
     .update({
       block_kind: "action_closed",
+      metadata: nextMetadata ?? validateMuaMetadata("action_closed", {
+        closed_reason: options?.closedReason,
+        closed_at: closedAt,
+      }),
       updated_at: new Date().toISOString(),
     })
     .eq("id", blockId)
@@ -1712,8 +2168,8 @@ async function runBlockProcessor(block: PendingUserBlockRow): Promise<BlockProce
     "- Keep analysis factual and concise.",
     "- `mua_blocks` should be atomic and useful (0-5 items).",
     "- Use `block_kind`=`action_open` ONLY for concrete tasks the user needs to act on (e.g., 'email someone', 'schedule a meeting', 'submit a draft'). Do NOT use action_open for questions, observations, musings, or information the user shared. When in doubt, use note. Default to note.",
-    "- `related_block_ids` must only use ids from candidate_related_blocks.",
-    "- `entity_names` should only include likely people (proper names), not generic nouns.",
+    "- `related_blocks` must only use ids from candidate_related_blocks. Add a short optional label when the connection meaning is clear.",
+    "- `entity_names` should include significant proper nouns: people, projects, organizations, places, products, or other concrete named things.",
     "- Do not repeat the user block verbatim.",
     "",
     "user_block:",
@@ -1743,7 +2199,12 @@ async function runBlockProcessor(block: PendingUserBlockRow): Promise<BlockProce
   return {
     analysis: normalizeWhitespace(String(parsed.analysis ?? "")),
     mua_blocks: sanitizeProcessorBlocks(Array.isArray(parsed.mua_blocks) ? parsed.mua_blocks : []),
-    related_block_ids: Array.isArray(parsed.related_block_ids) ? parsed.related_block_ids.map((id) => String(id)) : [],
+    related_blocks: Array.isArray(parsed.related_blocks)
+      ? parsed.related_blocks.map((row) => ({
+          id: String(row.id ?? ""),
+          label: typeof row.label === "string" ? String(row.label) : undefined,
+        }))
+      : [],
     entity_names: Array.isArray(parsed.entity_names) ? parsed.entity_names.map((name) => String(name)) : [],
   };
 }
@@ -1759,7 +2220,7 @@ async function runArtifactProcessor(artifact: PendingArtifactRow): Promise<Artif
     "- `description` should summarize what the file is (1-2 sentences).",
     "- `mua_blocks` should be atomic notes/actions extracted from the artifact (0-6 items).",
     "- Use `block_kind`=`action_open` ONLY for concrete tasks the user needs to act on (e.g., 'email someone', 'schedule a meeting', 'submit a draft'). Do NOT use action_open for questions, observations, musings, or information the user shared. When in doubt, use note. Default to note.",
-    "- `entity_names` should only include likely people (proper names).",
+    "- `entity_names` should include significant proper nouns: people, projects, organizations, places, products, or other concrete named things.",
     "",
     "artifact:",
     JSON.stringify({
@@ -1798,7 +2259,7 @@ async function createProcessorMuaBlocks(input: {
   drafts: ProcessorMuaBlockDraft[];
   metadata: Record<string, unknown>;
   derivedFrom: { type: "user_block" | "artifact"; id: string };
-  relatedBlockIds?: string[];
+  relatedBlocks?: RelatedBlockDraft[];
   entityIds?: string[];
 }): Promise<number> {
   let created = 0;
@@ -1825,16 +2286,18 @@ async function createProcessorMuaBlocks(input: {
       toType: input.derivedFrom.type,
       toId: input.derivedFrom.id,
       linkType: "derived_from",
-      metadata: { processor_version: PROCESSOR_VERSION },
+      metadata: { processor_version: PROCESSOR_VERSION, source: "state_processor" },
     });
 
-    for (const relatedId of input.relatedBlockIds ?? []) {
+    for (const relatedBlock of input.relatedBlocks ?? []) {
+      if (!relatedBlock.id) continue;
       await insertLink({
         fromType: "mua_block",
         fromId: block.id,
         toType: "user_block",
-        toId: relatedId,
+        toId: relatedBlock.id,
         linkType: "related",
+        label: relatedBlock.label,
         metadata: { processor_version: PROCESSOR_VERSION },
       });
     }
@@ -1846,7 +2309,7 @@ async function createProcessorMuaBlocks(input: {
         toType: "entity",
         toId: entityId,
         linkType: "about",
-        metadata: { processor_version: PROCESSOR_VERSION },
+        metadata: { processor_version: PROCESSOR_VERSION, source: "state_processor" },
       });
     }
   }
@@ -1907,7 +2370,7 @@ async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean
     const output = await runBlockProcessor(row);
     const entityIds: string[] = [];
     for (const entityName of output.entity_names.slice(0, 10)) {
-      const entity = await ensurePersonEntity(entityName);
+      const entity = await ensureEntity(entityName);
       if (!entity) continue;
       entityIds.push(entity.id);
       await insertLink({
@@ -1916,21 +2379,26 @@ async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean
         toType: "entity",
         toId: entity.id,
         linkType: "about",
-        metadata: { processor_version: PROCESSOR_VERSION, entity_name: entityName },
+        metadata: { processor_version: PROCESSOR_VERSION, source: "state_processor", entity_name: entityName },
       });
     }
 
-    const relatedBlockIds = output.related_block_ids
-      .filter((id) => id && id !== row.id)
+    const relatedBlocks = output.related_blocks
+      .map((relatedBlock) => ({
+        id: relatedBlock.id,
+        label: relatedBlock.label,
+      }))
+      .filter((relatedBlock) => relatedBlock.id && relatedBlock.id !== row.id)
       .slice(0, 8);
-    for (const relatedId of relatedBlockIds) {
+    for (const relatedBlock of relatedBlocks) {
       await insertLink({
         fromType: "user_block",
         fromId: row.id,
         toType: "user_block",
-        toId: relatedId,
+        toId: relatedBlock.id,
         linkType: "related",
-        metadata: { processor_version: PROCESSOR_VERSION },
+        label: relatedBlock.label,
+        metadata: { processor_version: PROCESSOR_VERSION, source: "state_processor" },
       });
     }
 
@@ -1938,12 +2406,13 @@ async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean
       drafts: output.mua_blocks,
       metadata: {
         processor_version: PROCESSOR_VERSION,
+        source: "state_processor",
         source_user_block_id: row.id,
         analysis: output.analysis,
         type: "block_processor",
       },
       derivedFrom: { type: "user_block", id: row.id },
-      relatedBlockIds,
+      relatedBlocks,
       entityIds,
     });
 
@@ -1964,7 +2433,7 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
     const output = await runArtifactProcessor(row);
     const entityIds: string[] = [];
     for (const entityName of output.entity_names.slice(0, 10)) {
-      const entity = await ensurePersonEntity(entityName);
+      const entity = await ensureEntity(entityName);
       if (!entity) continue;
       entityIds.push(entity.id);
       await insertLink({
@@ -1973,7 +2442,7 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
         toType: "entity",
         toId: entity.id,
         linkType: "about",
-        metadata: { processor_version: PROCESSOR_VERSION, entity_name: entityName },
+        metadata: { processor_version: PROCESSOR_VERSION, source: "state_processor", entity_name: entityName },
       });
     }
 
@@ -1987,6 +2456,7 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
           ],
           metadata: {
             processor_version: PROCESSOR_VERSION,
+            source: "state_processor",
             source_artifact_id: row.id,
             type: "artifact_description",
           },
@@ -1999,6 +2469,7 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
       drafts: output.mua_blocks,
       metadata: {
         processor_version: PROCESSOR_VERSION,
+        source: "state_processor",
         source_artifact_id: row.id,
         description: output.description,
         type: "artifact_processor",
@@ -2233,4 +2704,766 @@ export async function getCrmSummary(input?: {
   return summaries
     .sort((a, b) => b.roiScore - a.roiScore)
     .slice(0, limit);
+}
+
+function previewContent(text: string, max = 300): string {
+  const normalized = normalizeWhitespace(text);
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1)}…`;
+}
+
+function isoWeekKey(date = new Date()): string {
+  const utcDate = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${utcDate.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
+async function fetchEntityTouchCounts(): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  for (const batchSize of [5000]) {
+    const { data } = await supabase
+      .from("links")
+      .select("from_type, from_id, to_type, to_id")
+      .limit(batchSize);
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      if (String(row.from_type ?? "") === "entity") {
+        const id = String(row.from_id);
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+      if (String(row.to_type ?? "") === "entity") {
+        const id = String(row.to_id);
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+    }
+    break;
+  }
+  return counts;
+}
+
+async function appendEntityAlias(entityId: string, alias: string): Promise<boolean> {
+  const normalized = normalizeWhitespace(alias);
+  if (!normalized) return false;
+
+  const { data } = await supabase
+    .from("entities")
+    .select("id, aliases")
+    .eq("id", entityId)
+    .maybeSingle();
+  if (!data) return false;
+
+  const row = data as { aliases?: string[] };
+  const aliases = new Set<string>(row.aliases ?? []);
+  if ([...aliases].some((existing) => existing.toLowerCase() === normalized.toLowerCase())) {
+    return false;
+  }
+
+  aliases.add(normalized);
+  await supabase
+    .from("entities")
+    .update({
+      aliases: [...aliases].slice(0, 64),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", entityId);
+  return true;
+}
+
+async function markMergeCandidateBlockStatus(
+  blockId: string,
+  status: "pending" | "resolved" | "rejected",
+): Promise<void> {
+  await updateMuaBlockMetadata(blockId, (current) => {
+    const next = {
+      ...current,
+      review_status: status,
+      reviewed_at: new Date().toISOString(),
+    };
+    const parsed = MergeCandidateMeta.safeParse(next);
+    if (!parsed.success) {
+      warnMetadataValidation("merge_candidate", parsed.error.issues.map((issue) => issue.message).join("; "));
+      return next;
+    }
+    return parsed.data;
+  });
+}
+
+async function createReviewNote(input: {
+  jobId: string;
+  content: string;
+  type: string;
+  source: Exclude<ReviewSource, "state_processor">;
+  metadata?: Record<string, unknown>;
+  dedupeKey?: string;
+}): Promise<string> {
+  const result = await createMuaBlock({
+    content: input.content,
+    blockKind: "note",
+    source: "job",
+    sourceRef: {
+      v: 1,
+      type: "job_run",
+      id: { job_name: input.jobId },
+      extras: {},
+    },
+    metadata: {
+      source: input.source,
+      type: input.type,
+      ...(input.metadata ?? {}),
+    },
+    dedupeKey: input.dedupeKey,
+  });
+  return result.id;
+}
+
+async function fetchPendingMergeCandidateBlocks(limit = 200): Promise<Array<Record<string, unknown>>> {
+  const { data } = await supabase
+    .from("mua_blocks")
+    .select("id, content, metadata, created_at")
+    .eq("source", "job")
+    .eq("block_kind", "note")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  return ((data ?? []) as Array<Record<string, unknown>>).filter((row) => {
+    const metadata = metadataRecord(row.metadata);
+    if (metadata.type !== "merge_candidate") return false;
+    const status = String(metadata.review_status ?? "pending");
+    return status === "pending";
+  });
+}
+
+async function fetchEndpointPreviews(
+  refs: Array<{ type: string; id: string }>,
+): Promise<Map<string, string>> {
+  const unique = new Map<string, { type: string; id: string }>();
+  for (const ref of refs) {
+    unique.set(`${ref.type}:${ref.id}`, ref);
+  }
+
+  const byType = new Map<string, string[]>();
+  for (const ref of unique.values()) {
+    const ids = byType.get(ref.type) ?? [];
+    ids.push(ref.id);
+    byType.set(ref.type, ids);
+  }
+
+  const previews = new Map<string, string>();
+
+  for (const [type, ids] of byType) {
+    if (type === "user_block" || type === "mua_block") {
+      const table = type === "user_block" ? "user_blocks" : "mua_blocks";
+      for (const part of chunk(ids, 100)) {
+        const { data } = await supabase
+          .from(table)
+          .select("id, content")
+          .in("id", part);
+        for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+          previews.set(`${type}:${String(row.id)}`, previewContent(String(row.content ?? "")));
+        }
+      }
+      continue;
+    }
+
+    if (type === "entity") {
+      for (const part of chunk(ids, 100)) {
+        const { data } = await supabase
+          .from("entities")
+          .select("id, name")
+          .in("id", part);
+        for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+          previews.set(`${type}:${String(row.id)}`, String(row.name ?? ""));
+        }
+      }
+      continue;
+    }
+
+    if (type === "artifact") {
+      for (const part of chunk(ids, 100)) {
+        const { data } = await supabase
+          .from("artifacts")
+          .select("id, title, text_content")
+          .in("id", part);
+        for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+          const preview = String(row.title ?? "") || previewContent(String(row.text_content ?? ""));
+          previews.set(`${type}:${String(row.id)}`, preview);
+        }
+      }
+    }
+  }
+
+  return previews;
+}
+
+async function applyMissedLinks(
+  drafts: ReviewMissedLinkDraft[],
+  source: Exclude<ReviewSource, "state_processor">,
+): Promise<number> {
+  let applied = 0;
+  for (const draft of drafts) {
+    const entity = await ensureEntity(draft.entity_name);
+    if (!entity) continue;
+    const linkId = await insertLink({
+      fromType: draft.block_type,
+      fromId: draft.block_id,
+      toType: "entity",
+      toId: entity.id,
+      linkType: "about",
+      metadata: { source },
+    });
+    if (linkId) applied++;
+  }
+  return applied;
+}
+
+async function applyAliasUpdates(drafts: ReviewAliasUpdateDraft[]): Promise<number> {
+  let applied = 0;
+  for (const draft of drafts) {
+    if (await appendEntityAlias(draft.entity_id, draft.new_alias)) applied++;
+  }
+  return applied;
+}
+
+async function applyNewConnections(
+  drafts: ReviewConnectionDraft[],
+  source: Exclude<ReviewSource, "state_processor">,
+): Promise<number> {
+  let applied = 0;
+  for (const draft of drafts) {
+    const linkId = await insertLink({
+      fromType: draft.from_type,
+      fromId: draft.from_id,
+      toType: draft.to_type,
+      toId: draft.to_id,
+      linkType: "related",
+      label: draft.label,
+      metadata: { source },
+    });
+    if (linkId) applied++;
+  }
+  return applied;
+}
+
+export async function mergeEntities(
+  keepId: string,
+  mergeId: string,
+  options?: { mergeCandidateBlockId?: string },
+): Promise<void> {
+  if (!keepId || !mergeId || keepId === mergeId) return;
+
+  const { data: entities } = await supabase
+    .from("entities")
+    .select("id, name, aliases")
+    .in("id", [keepId, mergeId]);
+  const rows = (entities ?? []) as Array<Record<string, unknown>>;
+  const keep = rows.find((row) => String(row.id) === keepId);
+  const merge = rows.find((row) => String(row.id) === mergeId);
+  if (!keep || !merge) return;
+
+  const aliases = new Set<string>([
+    ...(((keep.aliases as string[] | undefined) ?? [])),
+    ...(((merge.aliases as string[] | undefined) ?? [])),
+    String(merge.name ?? ""),
+  ].filter(Boolean));
+
+  await supabase
+    .from("entities")
+    .update({
+      aliases: [...aliases].slice(0, 64),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", keepId);
+
+  await supabase
+    .from("links")
+    .update({ from_id: keepId })
+    .eq("from_type", "entity")
+    .eq("from_id", mergeId);
+
+  await supabase
+    .from("links")
+    .update({ to_id: keepId })
+    .eq("to_type", "entity")
+    .eq("to_id", mergeId);
+
+  const { data: impactedLinks } = await supabase
+    .from("links")
+    .select("id, from_type, from_id, to_type, to_id, link_type, label, created_at")
+    .or(`and(from_type.eq.entity,from_id.eq.${keepId}),and(to_type.eq.entity,to_id.eq.${keepId})`)
+    .limit(2000);
+
+  const grouped = new Map<string, Array<Record<string, unknown>>>();
+  for (const row of (impactedLinks ?? []) as Array<Record<string, unknown>>) {
+    const key = [
+      String(row.from_type ?? ""),
+      String(row.from_id ?? ""),
+      String(row.to_type ?? ""),
+      String(row.to_id ?? ""),
+      String(row.link_type ?? ""),
+    ].join("|");
+    const items = grouped.get(key) ?? [];
+    items.push(row);
+    grouped.set(key, items);
+  }
+
+  for (const rowsForKey of grouped.values()) {
+    if (rowsForKey.length <= 1) continue;
+    rowsForKey.sort((a, b) => {
+      const aHasLabel = String(a.label ?? "").trim().length > 0 ? 1 : 0;
+      const bHasLabel = String(b.label ?? "").trim().length > 0 ? 1 : 0;
+      if (bHasLabel !== aHasLabel) return bHasLabel - aHasLabel;
+      return new Date(String(b.created_at ?? "")).getTime() - new Date(String(a.created_at ?? "")).getTime();
+    });
+    const duplicateIds = rowsForKey.slice(1).map((row) => String(row.id));
+    if (duplicateIds.length > 0) {
+      await supabase.from("links").delete().in("id", duplicateIds);
+    }
+  }
+
+  await supabase.from("entities").delete().eq("id", mergeId);
+
+  if (options?.mergeCandidateBlockId) {
+    await markMergeCandidateBlockStatus(options.mergeCandidateBlockId, "resolved");
+  }
+
+  await logSystemEvent({
+    level: "info",
+    component: "system",
+    eventType: "entity_merged",
+    message: `Merged entity ${mergeId} into ${keepId}`,
+    payload: { keepId, mergeId },
+  }).catch(() => {});
+}
+
+export async function runBoardHourlyReview(input: {
+  jobId: string;
+  lastRunAt?: number | null;
+}): Promise<HourlyReviewResult> {
+  const lastRunTimestamp = input.lastRunAt ? new Date(input.lastRunAt).toISOString() : null;
+  const since24h = new Date(Date.now() - (24 * 60 * 60 * 1000)).toISOString();
+
+  const [muaBlocksRes, userBlocksRes, entitiesRes, linksRes] = await Promise.all([
+    supabase
+      .from("mua_blocks")
+      .select("id, content, block_kind, created_at, metadata")
+      .gte("created_at", since24h)
+      .order("created_at", { ascending: false })
+      .limit(200),
+    supabase
+      .from("user_blocks")
+      .select("id, content, created_at, source")
+      .gte("created_at", since24h)
+      .order("created_at", { ascending: false })
+      .limit(200),
+    supabase
+      .from("entities")
+      .select("id, name, aliases")
+      .order("updated_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("links")
+      .select("id, from_type, from_id, to_type, to_id, link_type, label, created_at")
+      .gte("created_at", since24h)
+      .order("created_at", { ascending: false })
+      .limit(500),
+  ]);
+
+  const prompt = [
+    "You are Muavin's hourly board review.",
+    "Use the JSON context to identify recurring tags, missed entity links, alias updates, and merge candidates.",
+    "Focus analysis on blocks created after the last run timestamp. Earlier blocks are context only.",
+    "",
+    `last_run_timestamp: ${lastRunTimestamp ?? "never"}`,
+    "",
+    "mua_blocks_last_24h:",
+    JSON.stringify(muaBlocksRes.data ?? [], null, 2),
+    "",
+    "user_blocks_last_24h:",
+    JSON.stringify(userBlocksRes.data ?? [], null, 2),
+    "",
+    "entities:",
+    JSON.stringify(entitiesRes.data ?? [], null, 2),
+    "",
+    "links_last_24h:",
+    JSON.stringify(linksRes.data ?? [], null, 2),
+  ].join("\n");
+
+  const llmResult = await runLLM({
+    task: "board_hourly_review",
+    prompt,
+    cwd: SYSTEM_CWD,
+    ephemeral: true,
+    maxTurns: 5,
+    timeoutMs: 300_000,
+    jsonSchema: HOURLY_REVIEW_SCHEMA,
+  });
+
+  const parsed = parseStructuredOutput<HourlyReviewOutput>(llmResult.structuredOutput ?? llmResult.text);
+  if (!parsed) throw new Error("hourly review returned invalid structured output");
+
+  let createdTags = 0;
+  for (const tag of parsed.new_tags ?? []) {
+    const entity = await ensureEntity(tag.name);
+    if (entity) createdTags++;
+  }
+
+  const missedLinks = await applyMissedLinks(parsed.missed_links ?? [], "hourly_review");
+  const aliasUpdates = await applyAliasUpdates(parsed.alias_updates ?? []);
+
+  let mergeCandidates = 0;
+  for (const candidate of parsed.merge_candidates ?? []) {
+    const dedupeKey = await hashText(
+      `merge_candidate:${candidate.entity_id_keep}:${candidate.entity_id_merge}:${normalizeWhitespace(candidate.reason)}`,
+    );
+    await createReviewNote({
+      jobId: input.jobId,
+      content: `Merge candidate: ${candidate.reason}`,
+      type: "merge_candidate",
+      source: "hourly_review",
+      dedupeKey,
+      metadata: {
+        entity_id_keep: candidate.entity_id_keep,
+        entity_id_merge: candidate.entity_id_merge,
+        reason: candidate.reason,
+        review_status: "pending",
+      },
+    });
+    mergeCandidates++;
+  }
+
+  return {
+    createdTags,
+    missedLinks,
+    aliasUpdates,
+    mergeCandidates,
+    summary: normalizeWhitespace(parsed.summary || `hourly review: tags=${createdTags}, missed_links=${missedLinks}, aliases=${aliasUpdates}, merge_candidates=${mergeCandidates}`),
+  };
+}
+
+export async function runBoardDailyReview(input: {
+  jobId: string;
+  lastRunAt?: number | null;
+}): Promise<DailyReviewResult> {
+  const since30d = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000)).toISOString();
+  const entityTouchCounts = await fetchEntityTouchCounts();
+  const pendingMergeCandidates = await fetchPendingMergeCandidateBlocks(200);
+
+  const [entitiesRes, recentMuaRes, unlabeledLinksRes] = await Promise.all([
+    supabase
+      .from("entities")
+      .select("id, name, aliases, created_at")
+      .order("updated_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("mua_blocks")
+      .select("id, content, block_kind, created_at")
+      .gte("created_at", since30d)
+      .order("created_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("links")
+      .select("id, from_type, from_id, to_type, to_id, link_type, label, created_at")
+      .eq("link_type", "related")
+      .gte("created_at", since30d)
+      .order("created_at", { ascending: false })
+      .limit(200),
+  ]);
+
+  const unlabeledLinks = ((unlabeledLinksRes.data ?? []) as Array<Record<string, unknown>>)
+    .filter((row) => !String(row.label ?? "").trim());
+  const endpointPreviews = await fetchEndpointPreviews([
+    ...unlabeledLinks.map((row) => ({ type: String(row.from_type), id: String(row.from_id) })),
+    ...unlabeledLinks.map((row) => ({ type: String(row.to_type), id: String(row.to_id) })),
+  ]);
+
+  const linkContext = unlabeledLinks.map((row) => ({
+    id: String(row.id),
+    from_type: String(row.from_type),
+    from_id: String(row.from_id),
+    to_type: String(row.to_type),
+    to_id: String(row.to_id),
+    from_preview: endpointPreviews.get(`${String(row.from_type)}:${String(row.from_id)}`) ?? "",
+    to_preview: endpointPreviews.get(`${String(row.to_type)}:${String(row.to_id)}`) ?? "",
+  }));
+
+  const entitiesWithCounts = ((entitiesRes.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    ...row,
+    link_count: entityTouchCounts.get(String(row.id)) ?? 0,
+  }));
+
+  const prompt = [
+    "You are Muavin's daily board review.",
+    "Review entity merge candidates, tag operations, new semantic connections, and label enrichment for unlabeled related links.",
+    "",
+    "entities:",
+    JSON.stringify(entitiesWithCounts, null, 2),
+    "",
+    "pending_merge_candidates:",
+    JSON.stringify(pendingMergeCandidates, null, 2),
+    "",
+    "mua_blocks_last_30d:",
+    JSON.stringify(((recentMuaRes.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+      id: row.id,
+      content_preview: previewContent(String(row.content ?? "")),
+      block_kind: row.block_kind,
+      created_at: row.created_at,
+    })), null, 2),
+    "",
+    "unlabeled_related_links:",
+    JSON.stringify(linkContext, null, 2),
+  ].join("\n");
+
+  const llmResult = await runLLM({
+    task: "board_daily_review",
+    prompt,
+    cwd: SYSTEM_CWD,
+    ephemeral: true,
+    maxTurns: 5,
+    timeoutMs: 600_000,
+    jsonSchema: DAILY_REVIEW_SCHEMA,
+  });
+
+  const parsed = parseStructuredOutput<DailyReviewOutput>(llmResult.structuredOutput ?? llmResult.text);
+  if (!parsed) throw new Error("daily review returned invalid structured output");
+
+  const acceptedMerges = new Set((parsed.merges ?? []).map((merge) => `${merge.keep_id}:${merge.merge_id}`));
+  let merges = 0;
+  let rejectedMergeCandidates = 0;
+  for (const block of pendingMergeCandidates) {
+    const metadata = metadataRecord(block.metadata);
+    const keepId = String(metadata.entity_id_keep ?? "");
+    const mergeId = String(metadata.entity_id_merge ?? "");
+    const key = `${keepId}:${mergeId}`;
+    if (acceptedMerges.has(key)) {
+      await mergeEntities(keepId, mergeId, { mergeCandidateBlockId: String(block.id) });
+      merges++;
+    } else {
+      await markMergeCandidateBlockStatus(String(block.id), "rejected");
+      rejectedMergeCandidates++;
+    }
+  }
+
+  let tagOps = 0;
+  for (const op of parsed.tag_ops ?? []) {
+    if (op.op === "rename" && op.new_name) {
+      await supabase
+        .from("entities")
+        .update({
+          name: normalizeEntityName(op.new_name),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", op.entity_id);
+      tagOps++;
+      continue;
+    }
+    if (op.op === "merge" && op.merge_into_id) {
+      await mergeEntities(op.merge_into_id, op.entity_id);
+      tagOps++;
+    }
+  }
+
+  const newConnections = await applyNewConnections(parsed.new_connections ?? [], "daily_review");
+
+  let labelUpdates = 0;
+  for (const update of parsed.label_updates ?? []) {
+    const linkRow = unlabeledLinks.find((row) => String(row.id) === update.link_id);
+    if (!linkRow) continue;
+    await setLinkLabel(update.link_id, update.label);
+    labelUpdates++;
+  }
+
+  return {
+    merges,
+    rejectedMergeCandidates,
+    tagOps,
+    newConnections,
+    labelUpdates,
+    summary: normalizeWhitespace(parsed.summary || `daily review: merges=${merges}, rejected=${rejectedMergeCandidates}, tag_ops=${tagOps}, new_connections=${newConnections}, labels=${labelUpdates}`),
+  };
+}
+
+export async function runBoardWeeklyReview(input: {
+  jobId: string;
+  lastRunAt?: number | null;
+}): Promise<WeeklyReviewResult> {
+  const entityTouchCounts = await fetchEntityTouchCounts();
+  const [entitiesRes, openActionsRes, reviewBlocksRes, userCountRes, noteCountRes, openCountRes, closedCountRes, linksCountRes] = await Promise.all([
+    supabase
+      .from("entities")
+      .select("id, name, aliases, created_at")
+      .order("updated_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("mua_blocks")
+      .select("id, content, created_at, metadata")
+      .eq("block_kind", "action_open")
+      .order("created_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("mua_blocks")
+      .select("id, metadata, created_at")
+      .eq("source", "job")
+      .gte("created_at", new Date(Date.now() - (7 * 24 * 60 * 60 * 1000)).toISOString())
+      .order("created_at", { ascending: false })
+      .limit(200),
+    supabase.from("user_blocks").select("*", { count: "exact", head: true }),
+    supabase.from("mua_blocks").select("*", { count: "exact", head: true }).eq("block_kind", "note"),
+    supabase.from("mua_blocks").select("*", { count: "exact", head: true }).eq("block_kind", "action_open"),
+    supabase.from("mua_blocks").select("*", { count: "exact", head: true }).eq("block_kind", "action_closed"),
+    supabase.from("links").select("*", { count: "exact", head: true }),
+  ]);
+
+  const entitiesWithCounts = ((entitiesRes.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    ...row,
+    link_count: entityTouchCounts.get(String(row.id)) ?? 0,
+  }));
+  const openActions = ((openActionsRes.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    id: row.id,
+    content: row.content,
+    created_at: row.created_at,
+    metadata: row.metadata,
+    last_acknowledged_at: extractLastAcknowledgedAt(metadataRecord(row.metadata)),
+  }));
+  const prompt = [
+    "You are Muavin's weekly board review.",
+    "Review the graph for safe pruning, stale actions, structural cleanup, observations, and any lower-tier fixes worth applying now.",
+    "",
+    "entities:",
+    JSON.stringify(entitiesWithCounts, null, 2),
+    "",
+    "open_actions:",
+    JSON.stringify(openActions, null, 2),
+    "",
+    "aggregate_stats:",
+    JSON.stringify({
+      total_user_blocks: userCountRes.count ?? 0,
+      total_mua_blocks_note: noteCountRes.count ?? 0,
+      total_mua_blocks_action_open: openCountRes.count ?? 0,
+      total_mua_blocks_action_closed: closedCountRes.count ?? 0,
+      total_entities: entitiesWithCounts.length,
+      total_links: linksCountRes.count ?? 0,
+    }, null, 2),
+    "",
+    "review_blocks_last_7d:",
+    JSON.stringify(reviewBlocksRes.data ?? [], null, 2),
+  ].join("\n");
+
+  const llmResult = await runLLM({
+    task: "board_weekly_review",
+    prompt,
+    cwd: SYSTEM_CWD,
+    ephemeral: true,
+    maxTurns: 6,
+    timeoutMs: 600_000,
+    jsonSchema: WEEKLY_REVIEW_SCHEMA,
+  });
+
+  const parsed = parseStructuredOutput<WeeklyReviewOutput>(llmResult.structuredOutput ?? llmResult.text);
+  if (!parsed) throw new Error("weekly review returned invalid structured output");
+
+  let pruned = 0;
+  for (const draft of parsed.prune ?? []) {
+    if ((entityTouchCounts.get(draft.entity_id) ?? 0) > 0) continue;
+    await supabase.from("links").delete().or(`and(from_type.eq.entity,from_id.eq.${draft.entity_id}),and(to_type.eq.entity,to_id.eq.${draft.entity_id})`);
+    await supabase.from("entities").delete().eq("id", draft.entity_id);
+    pruned++;
+  }
+
+  let closedActions = 0;
+  let nudges = 0;
+  for (const draft of parsed.stale_actions ?? []) {
+    if (draft.suggestion === "close") {
+      await closeAction(draft.block_id, { closedReason: "archived" });
+      closedActions++;
+      continue;
+    }
+    if (draft.suggestion === "nudge") {
+      const action = openActions.find((row) => String(row.id) === draft.block_id);
+      await createReviewNote({
+        jobId: input.jobId,
+        content: `Action may be stale: ${previewContent(String(action?.content ?? ""))}. Consider acting on it or archiving.`,
+        type: "staleness_nudge",
+        source: "weekly_review",
+        metadata: { source_block_id: draft.block_id },
+      });
+      nudges++;
+    }
+  }
+
+  let cleanupFixes = 0;
+  for (const draft of parsed.cleanup ?? []) {
+    if (draft.type === "link" && draft.action === "delete_orphan_link") {
+      const { data } = await supabase
+        .from("links")
+        .select("id, from_type, from_id, to_type, to_id")
+        .eq("id", draft.id)
+        .maybeSingle();
+      if (!data) continue;
+      const link = data as Record<string, unknown>;
+      const endpoints = await fetchEndpointPreviews([
+        { type: String(link.from_type), id: String(link.from_id) },
+        { type: String(link.to_type), id: String(link.to_id) },
+      ]);
+      if (!endpoints.get(`${String(link.from_type)}:${String(link.from_id)}`) || !endpoints.get(`${String(link.to_type)}:${String(link.to_id)}`)) {
+        await supabase.from("links").delete().eq("id", draft.id);
+        cleanupFixes++;
+      }
+    }
+  }
+
+  let observations = 0;
+  if (normalizeWhitespace(parsed.observations ?? "")) {
+    const weekKey = isoWeekKey();
+    const dedupeKey = await hashText(`weekly_observations:${weekKey}`);
+    await createReviewNote({
+      jobId: input.jobId,
+      content: normalizeWhitespace(parsed.observations),
+      type: "weekly_observations",
+      source: "weekly_review",
+      dedupeKey,
+      metadata: { iso_week: weekKey },
+    });
+    observations++;
+  }
+
+  const aliasUpdates = await applyAliasUpdates(parsed.alias_updates ?? []);
+  const missedLinks = await applyMissedLinks(parsed.missed_links ?? [], "weekly_review");
+  const newConnections = await applyNewConnections(parsed.new_connections ?? [], "weekly_review");
+
+  let mergeCandidates = 0;
+  for (const candidate of parsed.merge_candidates ?? []) {
+    const dedupeKey = await hashText(
+      `merge_candidate:${candidate.entity_id_keep}:${candidate.entity_id_merge}:${normalizeWhitespace(candidate.reason)}`,
+    );
+    await createReviewNote({
+      jobId: input.jobId,
+      content: `Merge candidate: ${candidate.reason}`,
+      type: "merge_candidate",
+      source: "weekly_review",
+      dedupeKey,
+      metadata: {
+        entity_id_keep: candidate.entity_id_keep,
+        entity_id_merge: candidate.entity_id_merge,
+        reason: candidate.reason,
+        review_status: "pending",
+      },
+    });
+    mergeCandidates++;
+  }
+
+  return {
+    pruned,
+    closedActions,
+    nudges,
+    cleanupFixes,
+    observations,
+    aliasUpdates,
+    missedLinks,
+    mergeCandidates,
+    merges: 0,
+    tagOps: 0,
+    newConnections,
+    summary: normalizeWhitespace(parsed.summary || `weekly review: pruned=${pruned}, closed=${closedActions}, nudges=${nudges}, cleanup=${cleanupFixes}, observations=${observations}, aliases=${aliasUpdates}, missed_links=${missedLinks}, merge_candidates=${mergeCandidates}, new_connections=${newConnections}`),
+  };
 }

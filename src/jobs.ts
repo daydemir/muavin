@@ -55,6 +55,36 @@ export const DEFAULT_JOBS: Job[] = [
     type: "system",
     enabled: true,
   },
+  {
+    id: "board-hourly-review",
+    name: "Board hourly review",
+    description: "Tag discovery, entity extraction, alias management, merge candidate flagging",
+    schedule: "15 * * * *",
+    action: "board-hourly-review",
+    type: "system",
+    enabled: true,
+    timeoutMs: 300000,
+  },
+  {
+    id: "board-daily-review",
+    name: "Board daily review",
+    description: "Entity merges, tag refinement, connection discovery, link label enrichment",
+    schedule: "0 4 * * *",
+    action: "board-daily-review",
+    type: "system",
+    enabled: true,
+    timeoutMs: 600000,
+  },
+  {
+    id: "board-weekly-review",
+    name: "Board weekly review",
+    description: "Structural cleanup, action staleness review, pattern detection",
+    schedule: "0 5 * * 0",
+    action: "board-weekly-review",
+    type: "system",
+    enabled: true,
+    timeoutMs: 600000,
+  },
 ];
 
 export function seedDefaultJobs(existing: Job[]): Job[] {
