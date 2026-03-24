@@ -95,23 +95,24 @@ async function main() {
   }
 }
 
+const MUAVIN_REPO_DIR = "/Users/deniz/Build/muavin";
+const MUAVIN_CLI = `bun run ${MUAVIN_REPO_DIR}/src/cli.ts`;
+
 const LIVE_INSTRUCTIONS = `## Live Session — Block System
 
 You have access to Muavin's block storage via CLI commands. Your conversation is being automatically persisted.
 
 ### Available commands (via Bash tool):
-- \`bun muavin blocks search "query"\` — Search memory for relevant context
-- \`bun muavin blocks search "query" --json\` — Same but returns JSON
-- \`bun muavin blocks create --content "..." --source live --kind mua\` — Save a note or insight
-- \`bun muavin blocks recent\` — View recent conversation blocks
+- \`${MUAVIN_CLI} blocks search "query"\` — Search memory for relevant context
+- \`${MUAVIN_CLI} blocks search "query" --json\` — Same but returns JSON
+- \`${MUAVIN_CLI} blocks create --content "..." --source live --kind mua\` — Save a note or insight
+- \`${MUAVIN_CLI} blocks recent\` — View recent conversation blocks
 
 ### When to use these:
 - Search memory when the user references something from a past conversation or when you need background context
 - Create mua blocks to save important insights, decisions, action items, or synthesized information that should persist beyond this session
 - You do NOT need to save your conversational responses — that happens automatically
 - Only save substantive insights, decisions, plans, and extracted facts as blocks`;
-
-const MUAVIN_REPO_DIR = "/Users/deniz/Build/muavin";
 
 async function liveConversationCommand() {
   heading("Starting live Muavin conversation...\n");
