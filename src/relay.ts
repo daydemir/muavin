@@ -226,7 +226,6 @@ async function logMuaTelegramBlock(ctx: Context, content: string, metadata: Reco
     sourceRef: telegramSourceRef(ctx),
     metadata: { ...telegramMetadata(ctx, "outbound"), ...metadata },
     blockKind: "note",
-    confidence: 1,
   });
 }
 
@@ -849,7 +848,6 @@ bot.on("message:photo", async (ctx) => {
         artifact_id: artifact.artifactId,
       },
       blockKind: "note",
-      confidence: 0.9,
     });
 
     // 5. Link mua_block → artifact
@@ -859,7 +857,6 @@ bot.on("message:photo", async (ctx) => {
       toType: "artifact",
       toId: artifact.artifactId,
       linkType: "derived_from",
-      confidence: 0.95,
       metadata: { trigger: "photo_vision_analysis" },
     });
 

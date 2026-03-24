@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS mua_blocks (
   source_ref JSONB NOT NULL DEFAULT '{}'::jsonb,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   block_kind TEXT NOT NULL DEFAULT 'note' CHECK (block_kind IN ('note', 'action_open', 'action_closed')),
-  confidence NUMERIC(5,4) DEFAULT NULL,
   dedupe_key TEXT DEFAULT NULL UNIQUE
 );
 
@@ -46,12 +45,8 @@ CREATE TABLE IF NOT EXISTS entities (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  entity_type TEXT NOT NULL CHECK (entity_type IN ('person', 'company', 'place', 'school', 'department', 'program')),
-  canonical_name TEXT NOT NULL,
-  aliases TEXT[] NOT NULL DEFAULT '{}',
-  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  confidence NUMERIC(5,4) DEFAULT NULL,
-  verified BOOLEAN NOT NULL DEFAULT FALSE
+  name TEXT NOT NULL,
+  aliases TEXT[] NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -77,8 +72,9 @@ CREATE TABLE IF NOT EXISTS links (
   from_id UUID NOT NULL,
   to_type TEXT NOT NULL CHECK (to_type IN ('user_block', 'mua_block', 'entity', 'artifact')),
   to_id UUID NOT NULL,
-  link_type TEXT NOT NULL CHECK (link_type IN ('references', 'about', 'derived_from', 'related', 'supersedes', 'mentions', 'candidate_match')),
-  confidence NUMERIC(5,4) DEFAULT NULL,
+  link_type TEXT NOT NULL CHECK (link_type IN ('about', 'derived_from', 'related')),
+  label TEXT DEFAULT NULL,
+  label_embedding VECTOR(512) DEFAULT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
@@ -192,7 +188,7 @@ CREATE INDEX IF NOT EXISTS idx_mua_blocks_created_at ON mua_blocks(created_at DE
 CREATE INDEX IF NOT EXISTS idx_mua_blocks_visibility ON mua_blocks(visibility);
 CREATE INDEX IF NOT EXISTS idx_mua_blocks_kind ON mua_blocks(block_kind);
 
-CREATE INDEX IF NOT EXISTS idx_entities_type_name ON entities(entity_type, canonical_name);
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
 CREATE INDEX IF NOT EXISTS idx_entities_aliases ON entities USING GIN(aliases);
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_source_status ON artifacts(source_type, ingest_status);
@@ -202,6 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_checksum ON artifacts(checksum);
 CREATE INDEX IF NOT EXISTS idx_links_from ON links(from_type, from_id);
 CREATE INDEX IF NOT EXISTS idx_links_to ON links(to_type, to_id);
 CREATE INDEX IF NOT EXISTS idx_links_type ON links(link_type);
+CREATE INDEX IF NOT EXISTS idx_links_label_embedding ON links USING hnsw (label_embedding vector_cosine_ops);
 
 CREATE INDEX IF NOT EXISTS idx_clarification_status ON clarification_queue(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_processing_state_state_updated ON processing_state(state, updated_at);
@@ -222,8 +219,7 @@ SELECT
   source_ref,
   metadata,
   'user'::text AS author_type,
-  NULL::text AS block_kind,
-  NULL::numeric AS confidence
+  NULL::text AS block_kind
 FROM user_blocks
 UNION ALL
 SELECT
@@ -236,8 +232,7 @@ SELECT
   source_ref,
   metadata,
   'mua'::text AS author_type,
-  block_kind,
-  confidence
+  block_kind
 FROM mua_blocks;
 
 ALTER VIEW public.all_blocks_v SET (security_invoker = true);

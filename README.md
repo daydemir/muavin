@@ -44,6 +44,7 @@ bun muavin crm       # CRM view derived from blocks/entities/links
 bun muavin inbox     # list artifacts
 bun muavin ingest    # run ingestion (files implemented)
 bun muavin clarify   # clarification digest + answers
+bun muavin board     # board overview, actions, entities
 bun muavin status
 bun muavin config
 bun muavin test

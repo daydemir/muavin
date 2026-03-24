@@ -70,6 +70,9 @@ async function main() {
     case "blocks":
       await (await import("./blocks-cli")).blocksCommand(Bun.argv.slice(3));
       break;
+    case "board":
+      await (await import("./board-cli")).boardCommand(Bun.argv.slice(3));
+      break;
     case "live":
       await liveConversationCommand();
       break;
@@ -90,6 +93,7 @@ async function main() {
       console.log("  ingest  - Run inbox ingestion");
       console.log("  clarify - Run/answer clarification queue");
       console.log("  process - Run state processor manually");
+      console.log("  board   - Board overview, actions, and entities");
       console.log("  live    - Open a live Claude conversation with Muavin prompt");
       process.exit(0);
   }

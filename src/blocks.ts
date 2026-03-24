@@ -60,16 +60,14 @@ interface ClarificationQueueRow {
 
 interface EntityRow {
   id: string;
-  canonical_name: string;
+  name: string;
   aliases: string[];
-  entity_type: string;
-  verified: boolean;
+  created_at?: string;
 }
 
 interface ProcessorMuaBlockDraft {
   content: string;
   block_kind?: "note" | "action_open" | "action_closed";
-  confidence?: number;
 }
 
 interface BlockProcessResult {
@@ -104,7 +102,6 @@ export interface CrmTimelineItem {
 export interface CrmPersonSummary {
   entityId: string;
   name: string;
-  verified: boolean;
   lastContactAt: string | null;
   daysSinceContact: number | null;
   openLoops: number;
@@ -138,7 +135,6 @@ const BLOCK_PROCESS_SCHEMA = {
         properties: {
           content: { type: "string" },
           block_kind: { type: "string", enum: ["note", "action_open", "action_closed"] },
-          confidence: { type: "number" },
         },
         required: ["content"],
         additionalProperties: false,
@@ -162,7 +158,6 @@ const ARTIFACT_PROCESS_SCHEMA = {
         properties: {
           content: { type: "string" },
           block_kind: { type: "string", enum: ["note", "action_open", "action_closed"] },
-          confidence: { type: "number" },
         },
         required: ["content"],
         additionalProperties: false,
@@ -502,15 +497,14 @@ function escapeIlike(value: string): string {
 async function findPersonEntities(name: string): Promise<EntityRow[]> {
   const { data, error } = await supabase
     .from("entities")
-    .select("id, canonical_name, aliases, entity_type, verified")
-    .eq("entity_type", "person")
+    .select("id, name, aliases, created_at")
     .limit(200);
 
   if (error || !data) return [];
   const lowered = name.toLowerCase();
   return (data as EntityRow[])
     .filter((r) => {
-      if (r.canonical_name.toLowerCase().includes(lowered)) return true;
+      if (r.name.toLowerCase().includes(lowered)) return true;
       return (r.aliases ?? []).some((a) => a.toLowerCase().includes(lowered));
     })
     .slice(0, 10);
@@ -520,20 +514,19 @@ async function findPersonEntitiesLoose(name: string): Promise<EntityRow[]> {
   const lowered = name.toLowerCase();
   const { data, error } = await supabase
     .from("entities")
-    .select("id, canonical_name, aliases, entity_type, verified")
-    .eq("entity_type", "person")
+    .select("id, name, aliases, created_at")
     .limit(200);
 
   if (error || !data) return [];
   const rows = data as EntityRow[];
   return rows.filter((r) => {
-    if (r.canonical_name.toLowerCase().includes(lowered)) return true;
+    if (r.name.toLowerCase().includes(lowered)) return true;
     return (r.aliases ?? []).some((a) => a.toLowerCase().includes(lowered));
   });
 }
 
-async function createEntityCandidate(name: string, confidence: number): Promise<string | null> {
-  const canonicalName = name
+async function createEntityCandidate(name: string): Promise<string | null> {
+  const displayName = name
     .split(/\s+/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
@@ -541,12 +534,8 @@ async function createEntityCandidate(name: string, confidence: number): Promise<
   const { data, error } = await supabase
     .from("entities")
     .insert({
-      entity_type: "person",
-      canonical_name: canonicalName,
+      name: displayName,
       aliases: [name],
-      confidence,
-      verified: false,
-      metadata: { origin: "auto_candidate" },
     })
     .select("id")
     .single();
@@ -555,7 +544,7 @@ async function createEntityCandidate(name: string, confidence: number): Promise<
   return (data as { id: string }).id;
 }
 
-async function ensurePersonEntity(name: string, confidence: number): Promise<EntityRow | null> {
+async function ensurePersonEntity(name: string): Promise<EntityRow | null> {
   const cleaned = normalizeWhitespace(name);
   if (!cleaned) return null;
 
@@ -564,7 +553,7 @@ async function ensurePersonEntity(name: string, confidence: number): Promise<Ent
   const matches = await findPersonEntitiesLoose(normalized);
   if (matches.length > 0) {
     const exact = matches.find((m) => {
-      if (m.canonical_name.toLowerCase() === lowered) return true;
+      if (m.name.toLowerCase() === lowered) return true;
       return (m.aliases ?? []).some((a) => a.toLowerCase() === lowered);
     }) ?? matches[0];
 
@@ -583,14 +572,12 @@ async function ensurePersonEntity(name: string, confidence: number): Promise<Ent
     };
   }
 
-  const id = await createEntityCandidate(normalized, confidence);
+  const id = await createEntityCandidate(normalized);
   if (!id) return null;
   return {
     id,
-    canonical_name: normalized,
+    name: normalized,
     aliases: [normalized],
-    entity_type: "person",
-    verified: false,
   };
 }
 
@@ -599,8 +586,7 @@ export async function insertLink(input: {
   fromId: string;
   toType: "user_block" | "mua_block" | "entity" | "artifact";
   toId: string;
-  linkType: "references" | "about" | "derived_from" | "related" | "supersedes" | "mentions" | "candidate_match";
-  confidence?: number;
+  linkType: "about" | "derived_from" | "related";
   metadata?: Record<string, unknown>;
 }): Promise<void> {
   const { data: existing } = await supabase
@@ -620,9 +606,54 @@ export async function insertLink(input: {
     to_type: input.toType,
     to_id: input.toId,
     link_type: input.linkType,
-    confidence: input.confidence ?? null,
     metadata: input.metadata ?? {},
   });
+}
+
+async function findExistingClarification(context: Record<string, unknown>): Promise<string | null> {
+  const mention = String(context.mention ?? "").toLowerCase();
+  const candidateEntityId = String(context.candidateEntityId ?? "");
+  const candidateEntityIds = new Set(
+    Array.isArray(context.candidateEntityIds)
+      ? context.candidateEntityIds.map((id) => String(id))
+      : [],
+  );
+
+  const { data, error } = await supabase
+    .from("clarification_queue")
+    .select("id, context")
+    .in("status", ["pending", "asked"])
+    .limit(100);
+
+  if (error || !data) return null;
+
+  for (const row of data as Array<Record<string, unknown>>) {
+    const existing = metadataRecord(row.context);
+    if (String(existing.type ?? "") !== String(context.type ?? "")) continue;
+    if (mention && String(existing.mention ?? "").toLowerCase() !== mention) continue;
+
+    const existingCandidateId = String(existing.candidateEntityId ?? "");
+    if (candidateEntityId && existingCandidateId === candidateEntityId) {
+      return String(row.id);
+    }
+
+    const existingCandidateIds = Array.isArray(existing.candidateEntityIds)
+      ? existing.candidateEntityIds.map((id) => String(id))
+      : [];
+    if (candidateEntityIds.size > 0 && existingCandidateIds.some((id) => candidateEntityIds.has(id))) {
+      return String(row.id);
+    }
+  }
+
+  return null;
+}
+
+function isCandidateRelatedLink(row: Record<string, unknown>, blockId: string, mention: string): boolean {
+  if (String(row.link_type ?? "") !== "related") return false;
+  if (String(row.from_type ?? "") !== "user_block") return false;
+  if (String(row.from_id ?? "") !== blockId) return false;
+  const metadata = metadataRecord(row.metadata);
+  return metadata.trigger === "email_target" && metadata.candidate_match === true && String(metadata.mention ?? "") === mention;
 }
 
 async function queueClarification(input: {
@@ -682,14 +713,14 @@ function extractEmailTarget(content: string): string | null {
 }
 
 async function createMuaQuestionBlock(question: string, context: Record<string, unknown>): Promise<void> {
-  await supabase.from("mua_blocks").insert({
+  const dedupeKey = await hashText(`clarification:${normalizeWhitespace(question)}`);
+  await createMuaBlock({
     content: question,
     visibility: "private",
     source: "system",
-    source_ref: normalizeSourceRef("system"),
     metadata: { kind: "clarification", ...context },
-    block_kind: "action_open",
-    confidence: 0.5,
+    blockKind: "note",
+    dedupeKey,
   });
 }
 
@@ -705,7 +736,6 @@ async function maybeQueueEntityDisambiguation(blockId: string, content: string):
       toType: "entity",
       toId: matches[0].id,
       linkType: "about",
-      confidence: 0.9,
       metadata: { trigger: "email_target" },
     });
     return;
@@ -713,22 +743,24 @@ async function maybeQueueEntityDisambiguation(blockId: string, content: string):
 
   if (matches.length > 1) {
     const opts: ClarificationOption[] = matches.map((m) => ({
-      label: `${m.canonical_name}${m.verified ? " (verified)" : ""}`,
+      label: m.name,
       value: `entity:${m.id}`,
     }));
     opts.push({ label: `new person: ${target}`, value: `new:${target}` });
     opts.push({ label: "none of these", value: "dismiss" });
 
     const q = `for "email ${target}", which person did you mean?`;
-    const clarificationId = await queueClarification({
+    const clarificationContext = {
+      type: "person_disambiguation",
+      mention: target,
+      blockId,
+      candidateEntityIds: matches.map((m) => m.id),
+    };
+    const existingClarificationId = await findExistingClarification(clarificationContext);
+    const clarificationId = existingClarificationId ?? await queueClarification({
       question: q,
       options: opts,
-      context: {
-        type: "person_disambiguation",
-        mention: target,
-        blockId,
-        candidateEntityIds: matches.map((m) => m.id),
-      },
+      context: clarificationContext,
       priority: "high",
     });
 
@@ -738,7 +770,7 @@ async function maybeQueueEntityDisambiguation(blockId: string, content: string):
     return;
   }
 
-  const candidateId = await createEntityCandidate(target, 0.55);
+  const candidateId = await createEntityCandidate(target);
   if (!candidateId) return;
 
   await insertLink({
@@ -746,24 +778,25 @@ async function maybeQueueEntityDisambiguation(blockId: string, content: string):
     fromId: blockId,
     toType: "entity",
     toId: candidateId,
-    linkType: "candidate_match",
-    confidence: 0.55,
-    metadata: { trigger: "email_target", mention: target },
+    linkType: "related",
+    metadata: { trigger: "email_target", mention: target, candidate_match: true },
   });
 
   const q = `you wrote "email ${target}". should i treat ${target} as a new person?`;
-  const clarificationId = await queueClarification({
+  const clarificationContext = {
+    type: "person_new_confirm",
+    mention: target,
+    blockId,
+    candidateEntityId: candidateId,
+  };
+  const existingClarificationId = await findExistingClarification(clarificationContext);
+  const clarificationId = existingClarificationId ?? await queueClarification({
     question: q,
     options: [
       { label: `yes, create ${target}`, value: `confirm_new:${candidateId}` },
       { label: "no, ignore this", value: "dismiss" },
     ],
-    context: {
-      type: "person_new_confirm",
-      mention: target,
-      blockId,
-      candidateEntityId: candidateId,
-    },
+    context: clarificationContext,
     priority: "normal",
   });
 
@@ -888,7 +921,6 @@ export async function updateUserBlock(input: {
 export async function createMuaBlock(input: {
   content: string;
   blockKind?: "note" | "action_open" | "action_closed";
-  confidence?: number;
   visibility?: BlockVisibility;
   source?: BlockSource;
   sourceRef?: SourceRef | Record<string, unknown>;
@@ -917,7 +949,6 @@ export async function createMuaBlock(input: {
     .insert({
       content: input.content,
       block_kind: input.blockKind ?? "note",
-      confidence: input.confidence ?? null,
       visibility: input.visibility ?? "private",
       source,
       source_ref: sourceRef,
@@ -934,6 +965,17 @@ export async function createMuaBlock(input: {
   const id = (data as { id: string }).id;
   await upsertBlockEmbedding({ blockType: "mua", blockId: id, text: input.content }).catch(() => {});
   return { id, content: input.content, metadata: input.metadata ?? {} };
+}
+
+export async function closeAction(blockId: string): Promise<void> {
+  await supabase
+    .from("mua_blocks")
+    .update({
+      block_kind: "action_closed",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", blockId)
+    .eq("block_kind", "action_open");
 }
 
 export async function searchRelatedBlocks(input: {
@@ -1105,14 +1147,22 @@ export async function resolveClarification(input: { id: string; optionIndex: num
 
   if (contextType === "person_disambiguation") {
     const blockId = String(row.context.blockId ?? "");
+    const mention = String(row.context.mention ?? "");
     if (blockId && choice.value.startsWith("entity:")) {
       const entityId = choice.value.slice("entity:".length);
-      await supabase
+      const { data: linksToDelete } = await supabase
         .from("links")
-        .delete()
+        .select("id, from_type, from_id, link_type, metadata")
         .eq("from_type", "user_block")
         .eq("from_id", blockId)
-        .eq("link_type", "candidate_match");
+        .eq("link_type", "related");
+
+      const tempLinkIds = ((linksToDelete ?? []) as Array<Record<string, unknown>>)
+        .filter((link) => isCandidateRelatedLink(link, blockId, mention));
+
+      if (tempLinkIds.length > 0) {
+        await supabase.from("links").delete().in("id", tempLinkIds.map((link) => String(link.id)));
+      }
 
       await insertLink({
         fromType: "user_block",
@@ -1120,23 +1170,18 @@ export async function resolveClarification(input: { id: string; optionIndex: num
         toType: "entity",
         toId: entityId,
         linkType: "about",
-        confidence: 0.95,
         metadata: { resolved_by: "clarify" },
       });
-
-      await supabase.from("entities").update({ verified: true, updated_at: new Date().toISOString() }).eq("id", entityId);
     } else if (blockId && choice.value.startsWith("new:")) {
       const mention = choice.value.slice("new:".length);
-      const entityId = await createEntityCandidate(mention, 0.85);
+      const entityId = await createEntityCandidate(mention);
       if (entityId) {
-        await supabase.from("entities").update({ verified: true, updated_at: new Date().toISOString() }).eq("id", entityId);
         await insertLink({
           fromType: "user_block",
           fromId: blockId,
           toType: "entity",
           toId: entityId,
           linkType: "about",
-          confidence: 0.9,
           metadata: { resolved_by: "clarify_new" },
         });
       }
@@ -1145,17 +1190,24 @@ export async function resolveClarification(input: { id: string; optionIndex: num
 
   if (contextType === "person_new_confirm") {
     const blockId = String(row.context.blockId ?? "");
+    const mention = String(row.context.mention ?? "");
     if (choice.value.startsWith("confirm_new:")) {
       const entityId = choice.value.slice("confirm_new:".length);
-      await supabase.from("entities").update({ verified: true, confidence: 0.9, updated_at: new Date().toISOString() }).eq("id", entityId);
       if (blockId) {
-        await supabase
+        const { data: linksToDelete } = await supabase
           .from("links")
-          .delete()
+          .select("id, from_type, from_id, link_type, metadata")
           .eq("from_type", "user_block")
           .eq("from_id", blockId)
-          .eq("link_type", "candidate_match")
+          .eq("link_type", "related")
           .eq("to_id", entityId);
+
+        const tempLinkIds = ((linksToDelete ?? []) as Array<Record<string, unknown>>)
+          .filter((link) => isCandidateRelatedLink(link, blockId, mention))
+          .map((link) => String(link.id));
+        if (tempLinkIds.length > 0) {
+          await supabase.from("links").delete().in("id", tempLinkIds);
+        }
 
         await insertLink({
           fromType: "user_block",
@@ -1163,14 +1215,23 @@ export async function resolveClarification(input: { id: string; optionIndex: num
           toType: "entity",
           toId: entityId,
           linkType: "about",
-          confidence: 0.9,
           metadata: { resolved_by: "clarify_confirm" },
         });
       }
-    } else if (choice.value === "dismiss") {
+    } else if (choice.value === "dismiss" && blockId) {
       const candidateEntityId = String(row.context.candidateEntityId ?? "");
-      if (candidateEntityId) {
-        await supabase.from("entities").update({ confidence: 0.1, updated_at: new Date().toISOString() }).eq("id", candidateEntityId);
+      const { data: linksToDelete } = await supabase
+        .from("links")
+        .select("id, from_type, from_id, link_type, metadata")
+        .eq("from_type", "user_block")
+        .eq("from_id", blockId)
+        .eq("link_type", "related")
+        .eq("to_id", candidateEntityId);
+      const tempLinkIds = ((linksToDelete ?? []) as Array<Record<string, unknown>>)
+        .filter((link) => isCandidateRelatedLink(link, blockId, mention))
+        .map((link) => String(link.id));
+      if (tempLinkIds.length > 0) {
+        await supabase.from("links").delete().in("id", tempLinkIds);
       }
     }
   }
@@ -1517,11 +1578,6 @@ function parseStructuredOutput<T>(raw: unknown): T | null {
   return null;
 }
 
-function clampConfidence(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1, Number(value)));
-}
-
 function sanitizeProcessorBlocks(input: ProcessorMuaBlockDraft[]): ProcessorMuaBlockDraft[] {
   const out: ProcessorMuaBlockDraft[] = [];
   for (const row of input) {
@@ -1530,7 +1586,6 @@ function sanitizeProcessorBlocks(input: ProcessorMuaBlockDraft[]): ProcessorMuaB
     out.push({
       content: content.slice(0, 3000),
       block_kind: row.block_kind ?? "note",
-      confidence: clampConfidence(row.confidence, 0.65),
     });
     if (out.length >= 6) break;
   }
@@ -1656,7 +1711,7 @@ async function runBlockProcessor(block: PendingUserBlockRow): Promise<BlockProce
     "Rules:",
     "- Keep analysis factual and concise.",
     "- `mua_blocks` should be atomic and useful (0-5 items).",
-    "- Use `block_kind`=`action_open` for unresolved next steps/questions, `action_closed` for explicitly completed outcomes, otherwise `note`.",
+    "- Use `block_kind`=`action_open` ONLY for concrete tasks the user needs to act on (e.g., 'email someone', 'schedule a meeting', 'submit a draft'). Do NOT use action_open for questions, observations, musings, or information the user shared. When in doubt, use note. Default to note.",
     "- `related_block_ids` must only use ids from candidate_related_blocks.",
     "- `entity_names` should only include likely people (proper names), not generic nouns.",
     "- Do not repeat the user block verbatim.",
@@ -1703,7 +1758,7 @@ async function runArtifactProcessor(artifact: PendingArtifactRow): Promise<Artif
     "Rules:",
     "- `description` should summarize what the file is (1-2 sentences).",
     "- `mua_blocks` should be atomic notes/actions extracted from the artifact (0-6 items).",
-    "- Use `block_kind`=`action_open` for unresolved next steps/questions, `action_closed` for explicitly completed outcomes, otherwise `note`.",
+    "- Use `block_kind`=`action_open` ONLY for concrete tasks the user needs to act on (e.g., 'email someone', 'schedule a meeting', 'submit a draft'). Do NOT use action_open for questions, observations, musings, or information the user shared. When in doubt, use note. Default to note.",
     "- `entity_names` should only include likely people (proper names).",
     "",
     "artifact:",
@@ -1754,7 +1809,6 @@ async function createProcessorMuaBlocks(input: {
     const block = await createMuaBlock({
       content: draft.content,
       blockKind: draft.block_kind ?? "note",
-      confidence: clampConfidence(draft.confidence, 0.65),
       source: "system",
       sourceRef: normalizeSourceRef("system", {
         type: input.derivedFrom.type === "user_block" ? "processor_user_block" : "processor_artifact",
@@ -1771,7 +1825,6 @@ async function createProcessorMuaBlocks(input: {
       toType: input.derivedFrom.type,
       toId: input.derivedFrom.id,
       linkType: "derived_from",
-      confidence: 1,
       metadata: { processor_version: PROCESSOR_VERSION },
     });
 
@@ -1782,7 +1835,6 @@ async function createProcessorMuaBlocks(input: {
         toType: "user_block",
         toId: relatedId,
         linkType: "related",
-        confidence: 0.7,
         metadata: { processor_version: PROCESSOR_VERSION },
       });
     }
@@ -1794,7 +1846,6 @@ async function createProcessorMuaBlocks(input: {
         toType: "entity",
         toId: entityId,
         linkType: "about",
-        confidence: 0.75,
         metadata: { processor_version: PROCESSOR_VERSION },
       });
     }
@@ -1856,7 +1907,7 @@ async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean
     const output = await runBlockProcessor(row);
     const entityIds: string[] = [];
     for (const entityName of output.entity_names.slice(0, 10)) {
-      const entity = await ensurePersonEntity(entityName, 0.65);
+      const entity = await ensurePersonEntity(entityName);
       if (!entity) continue;
       entityIds.push(entity.id);
       await insertLink({
@@ -1864,8 +1915,7 @@ async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean
         fromId: row.id,
         toType: "entity",
         toId: entity.id,
-        linkType: "mentions",
-        confidence: 0.72,
+        linkType: "about",
         metadata: { processor_version: PROCESSOR_VERSION, entity_name: entityName },
       });
     }
@@ -1879,8 +1929,7 @@ async function processUserBlock(row: PendingUserBlockRow): Promise<{ ok: boolean
         fromId: row.id,
         toType: "user_block",
         toId: relatedId,
-        linkType: "references",
-        confidence: 0.58,
+        linkType: "related",
         metadata: { processor_version: PROCESSOR_VERSION },
       });
     }
@@ -1915,7 +1964,7 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
     const output = await runArtifactProcessor(row);
     const entityIds: string[] = [];
     for (const entityName of output.entity_names.slice(0, 10)) {
-      const entity = await ensurePersonEntity(entityName, 0.65);
+      const entity = await ensurePersonEntity(entityName);
       if (!entity) continue;
       entityIds.push(entity.id);
       await insertLink({
@@ -1923,8 +1972,7 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
         fromId: row.id,
         toType: "entity",
         toId: entity.id,
-        linkType: "mentions",
-        confidence: 0.7,
+        linkType: "about",
         metadata: { processor_version: PROCESSOR_VERSION, entity_name: entityName },
       });
     }
@@ -1935,7 +1983,6 @@ async function processArtifact(row: PendingArtifactRow): Promise<{ ok: boolean; 
             {
               content: output.description,
               block_kind: "note",
-              confidence: 0.8,
             },
           ],
           metadata: {
@@ -2071,8 +2118,7 @@ export async function getCrmSummary(input?: {
   const limit = input?.limit ?? 25;
   let entityQuery = supabase
     .from("entities")
-    .select("id, canonical_name, aliases, verified")
-    .eq("entity_type", "person")
+    .select("id, name, aliases")
     .order("updated_at", { ascending: false })
     .limit(200);
   const { data: entitiesData } = await entityQuery;
@@ -2080,7 +2126,7 @@ export async function getCrmSummary(input?: {
   if (input?.peopleFilter && input.peopleFilter.trim()) {
     const token = input.peopleFilter.trim().toLowerCase();
     entities = entities.filter((e) => {
-      const canonical = String(e.canonical_name ?? "").toLowerCase();
+      const canonical = String(e.name ?? "").toLowerCase();
       if (canonical.includes(token)) return true;
       const aliases = (e.aliases as string[] | undefined) ?? [];
       return aliases.some((a) => a.toLowerCase().includes(token));
@@ -2090,14 +2136,14 @@ export async function getCrmSummary(input?: {
 
   for (const entity of entities) {
     const entityId = String(entity.id);
-    const name = String(entity.canonical_name);
+    const name = String(entity.name);
 
     const { data: linksData } = await supabase
       .from("links")
-      .select("from_type, from_id, link_type, confidence")
+      .select("from_type, from_id, link_type")
       .eq("to_type", "entity")
       .eq("to_id", entityId)
-      .in("link_type", ["about", "mentions", "candidate_match"])
+      .in("link_type", ["about", "related"])
       .limit(300);
 
     const links = (linksData ?? []) as Array<Record<string, unknown>>;
@@ -2175,7 +2221,6 @@ export async function getCrmSummary(input?: {
     summaries.push({
       entityId,
       name,
-      verified: Boolean(entity.verified),
       lastContactAt,
       daysSinceContact: daysSince,
       openLoops,

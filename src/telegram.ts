@@ -93,7 +93,6 @@ export async function sendAndLog(
       sourceRef: { chat_id: String(chatId) },
       metadata: { direction: "outbound", kind: "telegram_send" },
       blockKind: "note",
-      confidence: 1,
     }).catch(e =>
       console.error("sendAndLog createMuaBlock failed:", e),
     );

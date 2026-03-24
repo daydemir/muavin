@@ -163,7 +163,7 @@ for (const { userTurn, assistantText } of conversationTurns) {
         console.error("[live-stop] insertLink derived_from error:", err);
       });
 
-      // Link: next user_block references this mua_block (user is responding to assistant)
+      // Link: next user_block is related to this mua_block (user is responding to assistant)
       const nextTurnEntry = state.turns.find((t) => t.turn === userTurn + 1);
       if (nextTurnEntry) {
         await insertLink({
@@ -171,9 +171,9 @@ for (const { userTurn, assistantText } of conversationTurns) {
           fromId: nextTurnEntry.user_block_id,
           toType: "mua_block",
           toId: muaBlockId,
-          linkType: "references",
+          linkType: "related",
         }).catch((err: unknown) => {
-          console.error("[live-stop] insertLink references error:", err);
+          console.error("[live-stop] insertLink related error:", err);
         });
       }
     }

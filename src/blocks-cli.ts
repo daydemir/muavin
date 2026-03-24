@@ -187,7 +187,7 @@ export async function crmCommand(args: string[]): Promise<void> {
   rows.forEach((row, idx) => {
     const days = row.daysSinceContact === null ? "never" : `${row.daysSinceContact}d`;
     const topics = row.recentTopics.length > 0 ? row.recentTopics.join(", ") : "none";
-    console.log(`${idx + 1}. ${pc.bold(row.name)} ${row.verified ? pc.green("[verified]") : pc.yellow("[candidate]")}`);
+    console.log(`${idx + 1}. ${pc.bold(row.name)}`);
     console.log(`   roi=${row.roiScore.toFixed(2)} open_loops=${row.openLoops} last_contact=${days}`);
     console.log(`   topics=${topics}`);
 
