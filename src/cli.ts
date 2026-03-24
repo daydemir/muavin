@@ -176,8 +176,17 @@ async function liveConversationCommand() {
   if (continueFlag) args.push("--continue");
   if (nameArg) args.push("--name", nameArg);
 
-  // Write hooks settings to /tmp and pass via --settings
+  // Write hooks + permissions settings to /tmp and pass via --settings
   const hooksSettings = {
+    permissions: {
+      allow: [
+        "Bash(bun run*)",
+        "Bash(bun muavin*)",
+        "Bash(cat *)",
+        "Bash(ls *)",
+      ],
+      deny: [],
+    },
     hooks: {
       UserPromptSubmit: [
         {
