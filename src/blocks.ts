@@ -244,13 +244,66 @@ function metadataRecord(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
-interface SourceRefEnvelope {
-  [key: string]: unknown;
-  v: number;
-  type: string;
-  id: Record<string, unknown>;
+interface SourceRefBase {
+  v: 1;
   extras: Record<string, unknown>;
 }
+
+interface TelegramMessageRef extends SourceRefBase {
+  type: "telegram_message";
+  id: { chat_id: string; message_id: number | null; artifact_id?: string };
+}
+
+interface LiveSessionRef extends SourceRefBase {
+  type: "live_session";
+  id: { session_id: string; turn: number };
+}
+
+interface ImportBatchRef extends SourceRefBase {
+  type: "import_batch";
+  id: { batch_id: string; origin: string };
+}
+
+interface CliInputRef extends SourceRefBase {
+  type: "cli_input";
+  id: Record<string, unknown>;
+}
+
+interface JobRunRef extends SourceRefBase {
+  type: "job_run";
+  id: { job_name: string; run_id?: string };
+}
+
+interface AgentRunRef extends SourceRefBase {
+  type: "agent_run";
+  id: { agent_id: string };
+}
+
+interface ProcessorRef extends SourceRefBase {
+  type: "processor_user_block" | "processor_artifact";
+  id: { subject_id: string; processor_version: number };
+}
+
+interface ArtifactRef extends SourceRefBase {
+  type: "artifact";
+  id: Record<string, unknown>;
+}
+
+interface ExternalObjectRef extends SourceRefBase {
+  type: "external_object";
+  id: Record<string, unknown>;
+}
+
+export type SourceRef =
+  | TelegramMessageRef
+  | LiveSessionRef
+  | ImportBatchRef
+  | CliInputRef
+  | JobRunRef
+  | AgentRunRef
+  | ProcessorRef
+  | ArtifactRef
+  | ExternalObjectRef;
 
 function sourceRefTypeFor(channel: BlockSource): string {
   switch (channel) {
@@ -271,17 +324,17 @@ function sourceRefTypeFor(channel: BlockSource): string {
   }
 }
 
-function normalizeSourceRef(channel: BlockSource, sourceRef?: Record<string, unknown>): SourceRefEnvelope {
+function normalizeSourceRef(channel: BlockSource, sourceRef?: SourceRef | Record<string, unknown>): SourceRef {
   const input = metadataRecord(sourceRef);
   const id = metadataRecord(input.id);
   const extras = metadataRecord(input.extras);
-  const explicitType = typeof input.type === "string" ? input.type : sourceRefTypeFor(channel);
+  const type = typeof input.type === "string" ? input.type : sourceRefTypeFor(channel);
   return {
-    v: typeof input.v === "number" ? input.v : 1,
-    type: explicitType,
+    v: 1,
+    type,
     id: Object.keys(id).length > 0 ? id : input,
     extras,
-  };
+  } as SourceRef;
 }
 
 async function hashText(input: string): Promise<string> {
@@ -318,7 +371,7 @@ async function appendUserBlockVersion(input: {
   blockId: string;
   content: string;
   source: BlockSource;
-  sourceRef: Record<string, unknown>;
+  sourceRef: SourceRef;
   metadata: Record<string, unknown>;
   reason: "create" | "autosave" | "finalize";
 }): Promise<void> {
@@ -348,7 +401,7 @@ async function maybeCheckpointUserBlockVersion(input: {
   blockId: string;
   content: string;
   source: BlockSource;
-  sourceRef: Record<string, unknown>;
+  sourceRef: SourceRef;
   metadata: Record<string, unknown>;
   reason: "autosave" | "finalize";
 }): Promise<void> {
@@ -594,10 +647,38 @@ async function queueClarification(input: {
   return (data as { id: string }).id;
 }
 
+const EMAIL_TARGET_STOPWORDS = new Set([
+  // Pronouns
+  "me", "him", "her", "them", "us", "you", "it", "he", "she", "they", "we", "i",
+  // Common verbs
+  "is", "was", "has", "have", "had", "been", "being", "sent", "send", "sending",
+  "said", "saying", "wrote", "written", "get", "got", "make", "made", "do", "does",
+  "did", "done", "go", "going", "gone", "will", "would", "should", "could", "can",
+  "may", "might", "shall",
+  // Prepositions/conjunctions
+  "for", "from", "to", "at", "in", "on", "by", "with", "without", "about", "of",
+  "as", "or", "and", "but", "not", "so", "if", "then", "than", "that", "this",
+  "the", "an", "a",
+  // Adverbs/adjectives
+  "well", "also", "too", "again", "already", "just", "now", "here", "there", "back",
+  "up", "down", "out", "off", "over", "away", "tonight", "today", "tomorrow", "yesterday",
+  // Technical terms
+  "authentication", "authorization", "verification", "notification", "confirmation",
+  "configuration", "integration", "implementation", "subscription", "registration",
+  "password", "server", "client", "address", "account", "inbox", "outbox", "draft",
+  "thread", "reply", "forward", "bounce", "spam", "attachment",
+  // Other common non-name words
+  "showing", "attending", "everyone", "anyone", "someone", "nobody", "everybody",
+  "something", "nothing", "everything", "anything",
+]);
+
 function extractEmailTarget(content: string): string | null {
   const match = content.match(/\bemail\s+([a-z][a-z]+(?:\s+[a-z][a-z]+)?)/i);
   if (!match) return null;
-  return normalizeWhitespace(match[1]);
+  const extracted = normalizeWhitespace(match[1]);
+  const words = extracted.toLowerCase().split(/\s+/);
+  if (words.some((w) => EMAIL_TARGET_STOPWORDS.has(w))) return null;
+  return extracted;
 }
 
 async function createMuaQuestionBlock(question: string, context: Record<string, unknown>): Promise<void> {
@@ -695,7 +776,7 @@ export async function createUserBlock(input: {
   rawContent: string;
   visibility?: BlockVisibility;
   source?: BlockSource;
-  sourceRef?: Record<string, unknown>;
+  sourceRef?: SourceRef | Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }): Promise<BlockInsertResult> {
   const parsed = parseFrontmatter(input.rawContent);
@@ -745,7 +826,7 @@ export async function updateUserBlock(input: {
   id: string;
   rawContent: string;
   source?: BlockSource;
-  sourceRef?: Record<string, unknown>;
+  sourceRef?: SourceRef | Record<string, unknown>;
   metadata?: Record<string, unknown>;
   reason?: "autosave" | "finalize";
 }): Promise<BlockInsertResult> {
@@ -810,7 +891,7 @@ export async function createMuaBlock(input: {
   confidence?: number;
   visibility?: BlockVisibility;
   source?: BlockSource;
-  sourceRef?: Record<string, unknown>;
+  sourceRef?: SourceRef | Record<string, unknown>;
   metadata?: Record<string, unknown>;
   dedupeKey?: string;
 }): Promise<BlockInsertResult> {
