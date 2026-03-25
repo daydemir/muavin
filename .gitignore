@@ -1,6 +1,8 @@
 .env
 /docs/
 .playwright-mcp/
+.playwright-cli/
+output/playwright/
 firebase-debug.log
 node_modules/
 bun.lock*
