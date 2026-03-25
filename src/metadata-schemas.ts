@@ -3,11 +3,14 @@ import { z } from "zod";
 export const BaseMeta = z.object({}).passthrough();
 
 export const ActionOpenMeta = BaseMeta.extend({
+  action_type: z.string().optional(),
   last_acknowledged_at: z.string().datetime().optional(),
+  surface_interval_days: z.number().optional(),
+  next_surface_at: z.string().datetime().optional(),
 });
 
 export const ActionClosedMeta = BaseMeta.extend({
-  closed_reason: z.enum(["done", "archived", "duplicate", "superseded"]).optional(),
+  closed_reason: z.enum(["done", "archived"]).optional(),
   closed_at: z.string().datetime().optional(),
 });
 

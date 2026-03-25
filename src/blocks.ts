@@ -76,6 +76,7 @@ interface EntityRow {
 interface ProcessorMuaBlockDraft {
   content: string;
   block_kind?: "note" | "action_open" | "action_closed";
+  action_type?: string;
 }
 
 interface RelatedBlockDraft {
@@ -138,6 +139,17 @@ interface ReviewConnectionDraft {
   label: string;
 }
 
+interface ReviewPrerequisiteActionLinkDraft {
+  block_id: string;
+  label: string;
+}
+
+interface ReviewPrerequisiteActionDraft {
+  content: string;
+  entity_names: string[];
+  related_actions: ReviewPrerequisiteActionLinkDraft[];
+}
+
 interface ReviewLabelUpdateDraft {
   link_id: string;
   label: string;
@@ -149,6 +161,7 @@ interface HourlyReviewOutput {
   missed_links: ReviewMissedLinkDraft[];
   alias_updates: ReviewAliasUpdateDraft[];
   merge_candidates: ReviewMergeCandidateDraft[];
+  prerequisite_actions: ReviewPrerequisiteActionDraft[];
 }
 
 interface DailyReviewOutput {
@@ -157,6 +170,7 @@ interface DailyReviewOutput {
   tag_ops: DailyTagOpDraft[];
   new_connections: ReviewConnectionDraft[];
   label_updates: ReviewLabelUpdateDraft[];
+  prerequisite_actions: ReviewPrerequisiteActionDraft[];
 }
 
 interface WeeklyPruneDraft {
@@ -167,7 +181,7 @@ interface WeeklyPruneDraft {
 interface WeeklyStaleActionDraft {
   block_id: string;
   age_days: number;
-  suggestion: "close" | "keep" | "nudge";
+  suggestion: "keep" | "nudge";
 }
 
 interface WeeklyCleanupDraft {
@@ -227,6 +241,7 @@ interface HourlyReviewResult extends ReviewJobResult {
   missedLinks: number;
   aliasUpdates: number;
   mergeCandidates: number;
+  prerequisiteActions: number;
 }
 
 interface DailyReviewResult extends ReviewJobResult {
@@ -235,6 +250,7 @@ interface DailyReviewResult extends ReviewJobResult {
   tagOps: number;
   newConnections: number;
   labelUpdates: number;
+  prerequisiteActions: number;
 }
 
 interface WeeklyReviewResult extends ReviewJobResult {
@@ -276,6 +292,7 @@ const BLOCK_PROCESS_SCHEMA = {
         properties: {
           content: { type: "string" },
           block_kind: { type: "string", enum: ["note", "action_open", "action_closed"] },
+          action_type: { type: "string" },
         },
         required: ["content"],
         additionalProperties: false,
@@ -310,6 +327,7 @@ const ARTIFACT_PROCESS_SCHEMA = {
         properties: {
           content: { type: "string" },
           block_kind: { type: "string", enum: ["note", "action_open", "action_closed"] },
+          action_type: { type: "string" },
         },
         required: ["content"],
         additionalProperties: false,
@@ -373,8 +391,32 @@ const HOURLY_REVIEW_SCHEMA = {
         additionalProperties: false,
       },
     },
+    prerequisite_actions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          content: { type: "string" },
+          entity_names: { type: "array", items: { type: "string" } },
+          related_actions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                block_id: { type: "string" },
+                label: { type: "string" },
+              },
+              required: ["block_id", "label"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["content", "entity_names", "related_actions"],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ["summary", "new_tags", "missed_links", "alias_updates", "merge_candidates"],
+  required: ["summary", "new_tags", "missed_links", "alias_updates", "merge_candidates", "prerequisite_actions"],
   additionalProperties: false,
 } as const;
 
@@ -435,8 +477,9 @@ const DAILY_REVIEW_SCHEMA = {
         additionalProperties: false,
       },
     },
+    prerequisite_actions: HOURLY_REVIEW_SCHEMA.properties.prerequisite_actions,
   },
-  required: ["summary", "merges", "tag_ops", "new_connections", "label_updates"],
+  required: ["summary", "merges", "tag_ops", "new_connections", "label_updates", "prerequisite_actions"],
   additionalProperties: false,
 } as const;
 
@@ -463,7 +506,7 @@ const WEEKLY_REVIEW_SCHEMA = {
         properties: {
           block_id: { type: "string" },
           age_days: { type: "number" },
-          suggestion: { type: "string", enum: ["close", "keep", "nudge"] },
+          suggestion: { type: "string", enum: ["keep", "nudge"] },
         },
         required: ["block_id", "age_days", "suggestion"],
         additionalProperties: false,
@@ -577,7 +620,14 @@ function validateMuaMetadata(
   }
 
   if (blockKind === "action_open") {
-    const parsed = ActionOpenMeta.safeParse(metadata);
+    const normalized = {
+      ...metadata,
+      surface_interval_days: Number.isFinite(metadata.surface_interval_days)
+        ? Math.max(1, Math.min(180, Number(metadata.surface_interval_days)))
+        : 1,
+      next_surface_at: typeof metadata.next_surface_at === "string" ? metadata.next_surface_at : undefined,
+    };
+    const parsed = ActionOpenMeta.safeParse(normalized);
     if (!parsed.success) {
       warnMetadataValidation("action_open", parsed.error.issues.map((issue) => issue.message).join("; "));
       return metadata;
@@ -604,6 +654,18 @@ function extractLastAcknowledgedAt(metadata: Record<string, unknown>): string | 
     return null;
   }
   return parsed.data.last_acknowledged_at ?? null;
+}
+
+function extractActionType(metadata: Record<string, unknown>): string | null {
+  const parsed = ActionOpenMeta.safeParse(metadata);
+  if (!parsed.success) return null;
+  return parsed.data.action_type ?? null;
+}
+
+function extractNextSurfaceAt(metadata: Record<string, unknown>): string | null {
+  const parsed = ActionOpenMeta.safeParse(metadata);
+  if (!parsed.success) return null;
+  return parsed.data.next_surface_at ?? null;
 }
 
 interface SourceRefBase {
@@ -651,6 +713,11 @@ interface ArtifactRef extends SourceRefBase {
   id: Record<string, unknown>;
 }
 
+interface NoteFileRef extends SourceRefBase {
+  type: "note_file";
+  id: { filename: string };
+}
+
 interface ExternalObjectRef extends SourceRefBase {
   type: "external_object";
   id: Record<string, unknown>;
@@ -665,12 +732,15 @@ export type SourceRef =
   | AgentRunRef
   | ProcessorRef
   | ArtifactRef
+  | NoteFileRef
   | ExternalObjectRef;
 
 function sourceRefTypeFor(channel: BlockSource): string {
   switch (channel) {
     case "chat":
       return "telegram_message";
+    case "note":
+      return "note_file";
     case "file":
       return "artifact";
     case "cli":
@@ -1334,9 +1404,7 @@ export async function createMuaBlock(input: {
   if (!input.content.trim()) throw new Error("MUA block content cannot be empty");
   const blockKind = input.blockKind ?? "note";
   const metadataInput = metadataRecord(input.metadata);
-  const normalizedMetadata = blockKind === "action_open"
-    ? validateMuaMetadata(blockKind, metadataInput)
-    : validateMuaMetadata(blockKind, metadataInput);
+  const normalizedMetadata = validateMuaMetadata(blockKind, metadataInput);
   if (input.dedupeKey) {
     const { data: existing } = await supabase
       .from("mua_blocks")
@@ -1401,9 +1469,17 @@ async function updateMuaBlockMetadata(
 
 export async function ackAction(blockId: string): Promise<void> {
   await updateMuaBlockMetadata(blockId, (current) => {
+    const currentInterval = Number.isFinite(current.surface_interval_days)
+      ? Number(current.surface_interval_days)
+      : 1;
+    const nextInterval = Math.max(1, Math.min(180, currentInterval * 2));
+    const now = new Date();
+    const nextSurfaceAt = new Date(now.getTime() + (nextInterval * 24 * 60 * 60 * 1000)).toISOString();
     const nextMetadata = {
       ...current,
-      last_acknowledged_at: new Date().toISOString(),
+      last_acknowledged_at: now.toISOString(),
+      surface_interval_days: nextInterval,
+      next_surface_at: nextSurfaceAt,
     };
     return validateMuaMetadata("action_open", nextMetadata);
   });
@@ -1411,13 +1487,18 @@ export async function ackAction(blockId: string): Promise<void> {
 
 export async function closeAction(
   blockId: string,
-  options?: { closedReason?: ActionClosedReason; closedAt?: string },
+  options?: {
+    closedReason?: ActionClosedReason;
+    closedAt?: string;
+    metadata?: Record<string, unknown>;
+  },
 ): Promise<void> {
   const closedAt = options?.closedAt ?? new Date().toISOString();
   const nextMetadata = await updateMuaBlockMetadata(blockId, (current) => validateMuaMetadata("action_closed", {
     ...current,
     closed_reason: options?.closedReason,
     closed_at: closedAt,
+    ...(options?.metadata ?? {}),
   }));
 
   await supabase
@@ -1427,11 +1508,58 @@ export async function closeAction(
       metadata: nextMetadata ?? validateMuaMetadata("action_closed", {
         closed_reason: options?.closedReason,
         closed_at: closedAt,
+        ...(options?.metadata ?? {}),
       }),
       updated_at: new Date().toISOString(),
     })
     .eq("id", blockId)
     .eq("block_kind", "action_open");
+}
+
+export async function reclassifyAction(blockId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from("mua_blocks")
+    .select("id, block_kind, metadata")
+    .eq("id", blockId)
+    .maybeSingle();
+  if (error || !data) return;
+
+  const row = data as { block_kind?: string; metadata?: unknown };
+  if (row.block_kind !== "action_open") return;
+
+  const metadata = metadataRecord(row.metadata);
+  const {
+    last_acknowledged_at: _lastAcknowledgedAt,
+    action_type: _actionType,
+    surface_interval_days: _surfaceIntervalDays,
+    next_surface_at: _nextSurfaceAt,
+    ...rest
+  } = metadata;
+
+  const nextMetadata = {
+    ...rest,
+    reclassified_from: "action_open",
+    reclassified_at: new Date().toISOString(),
+  };
+
+  await supabase
+    .from("mua_blocks")
+    .update({
+      block_kind: "note",
+      metadata: nextMetadata,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", blockId)
+    .eq("block_kind", "action_open");
+
+  await logSystemEvent({
+    level: "info",
+    component: "system",
+    eventType: "action_reclassified",
+    message: `Reclassified action ${blockId} to note`,
+    relatedBlockId: blockId,
+    payload: { reclassified_from: "action_open" },
+  }).catch(() => {});
 }
 
 export async function searchRelatedBlocks(input: {
@@ -2042,6 +2170,7 @@ function sanitizeProcessorBlocks(input: ProcessorMuaBlockDraft[]): ProcessorMuaB
     out.push({
       content: content.slice(0, 3000),
       block_kind: row.block_kind ?? "note",
+      action_type: typeof row.action_type === "string" ? normalizeWhitespace(row.action_type).slice(0, 80) : undefined,
     });
     if (out.length >= 6) break;
   }
@@ -2152,12 +2281,29 @@ function truncateForPrompt(text: string, max = 1200): string {
   return `${text.slice(0, max)}\n...[truncated]`;
 }
 
+async function listRecentReclassifiedActionPreviews(limit = 10): Promise<string[]> {
+  const since30d = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000)).toISOString();
+  const { data } = await supabase
+    .from("mua_blocks")
+    .select("content, metadata, created_at")
+    .eq("block_kind", "note")
+    .gte("created_at", since30d)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  return ((data ?? []) as Array<Record<string, unknown>>)
+    .filter((row) => metadataRecord(row.metadata).reclassified_from === "action_open")
+    .slice(0, limit)
+    .map((row) => previewContent(String(row.content ?? ""), 160));
+}
+
 async function runBlockProcessor(block: PendingUserBlockRow): Promise<BlockProcessResult> {
   const related = await searchRelatedBlocks({
     query: block.content,
     scope: "all",
     limit: 12,
   }).catch(() => []);
+  const reclassifiedPreviews = await listRecentReclassifiedActionPreviews().catch(() => []);
 
   const candidates = blockCandidateRows(related, block.id);
   const prompt = [
@@ -2167,10 +2313,16 @@ async function runBlockProcessor(block: PendingUserBlockRow): Promise<BlockProce
     "Rules:",
     "- Keep analysis factual and concise.",
     "- `mua_blocks` should be atomic and useful (0-5 items).",
-    "- Use `block_kind`=`action_open` ONLY for concrete tasks the user needs to act on (e.g., 'email someone', 'schedule a meeting', 'submit a draft'). Do NOT use action_open for questions, observations, musings, or information the user shared. When in doubt, use note. Default to note.",
+    "- Create `action_open` when the user expresses intent to do something themselves: tasks they need to personally act on like emailing someone, scheduling a meeting, writing a draft, making a decision, or following up with someone.",
+    "- Do NOT create `action_open` for requests the user is making to Muavin, observations or analysis results, or feedback about the system.",
+    "- When unsure whether the user intends to act personally versus asking Muavin to act, lean toward creating the action because it can be archived later.",
+    "- Include a free-text `action_type` on each `action_open` that describes the action kind, such as `email`, `follow_up`, `write`, `decide`, `schedule`, or `review`. Do not force it into a fixed vocabulary.",
     "- `related_blocks` must only use ids from candidate_related_blocks. Add a short optional label when the connection meaning is clear.",
     "- `entity_names` should include significant proper nouns: people, projects, organizations, places, products, or other concrete named things.",
     "- Do not repeat the user block verbatim.",
+    "",
+    "These blocks were previously classified as actions but were reclassified as notes. They should not have been actions. Avoid similar classifications:",
+    JSON.stringify(reclassifiedPreviews, null, 2),
     "",
     "user_block:",
     JSON.stringify({
@@ -2212,6 +2364,7 @@ async function runBlockProcessor(block: PendingUserBlockRow): Promise<BlockProce
 async function runArtifactProcessor(artifact: PendingArtifactRow): Promise<ArtifactProcessResult> {
   const text = normalizeWhitespace(artifact.text_content ?? "");
   const textSnippet = text ? truncateForPrompt(text, 18_000) : "";
+  const reclassifiedPreviews = await listRecentReclassifiedActionPreviews().catch(() => []);
   const prompt = [
     "You are Muavin's artifact processor.",
     "Analyze one ingested artifact and produce structured outputs.",
@@ -2219,8 +2372,14 @@ async function runArtifactProcessor(artifact: PendingArtifactRow): Promise<Artif
     "Rules:",
     "- `description` should summarize what the file is (1-2 sentences).",
     "- `mua_blocks` should be atomic notes/actions extracted from the artifact (0-6 items).",
-    "- Use `block_kind`=`action_open` ONLY for concrete tasks the user needs to act on (e.g., 'email someone', 'schedule a meeting', 'submit a draft'). Do NOT use action_open for questions, observations, musings, or information the user shared. When in doubt, use note. Default to note.",
+    "- Create `action_open` when the artifact shows the user intends to do something themselves: tasks they need to personally act on like emailing someone, scheduling a meeting, writing a draft, making a decision, or following up with someone.",
+    "- Do NOT create `action_open` for requests the user is making to Muavin, observations or analysis results, or feedback about the system.",
+    "- When unsure whether the user intends to act personally versus asking Muavin to act, lean toward creating the action because it can be archived later.",
+    "- Include a free-text `action_type` on each `action_open` that describes the action kind, such as `email`, `follow_up`, `write`, `decide`, `schedule`, or `review`. Do not force it into a fixed vocabulary.",
     "- `entity_names` should include significant proper nouns: people, projects, organizations, places, products, or other concrete named things.",
+    "",
+    "These blocks were previously classified as actions but were reclassified as notes. They should not have been actions. Avoid similar classifications:",
+    JSON.stringify(reclassifiedPreviews, null, 2),
     "",
     "artifact:",
     JSON.stringify({
@@ -2267,6 +2426,12 @@ async function createProcessorMuaBlocks(input: {
     const dedupeKey = await hashText(
       `${input.derivedFrom.type}:${input.derivedFrom.id}:${PROCESSOR_VERSION}:${draft.block_kind ?? "note"}:${normalizeWhitespace(draft.content)}`,
     );
+    const blockMetadata = {
+      ...input.metadata,
+      ...(draft.block_kind === "action_open" && draft.action_type
+        ? { action_type: draft.action_type }
+        : {}),
+    };
     const block = await createMuaBlock({
       content: draft.content,
       blockKind: draft.block_kind ?? "note",
@@ -2275,7 +2440,7 @@ async function createProcessorMuaBlocks(input: {
         type: input.derivedFrom.type === "user_block" ? "processor_user_block" : "processor_artifact",
         id: { subject_id: input.derivedFrom.id, processor_version: PROCESSOR_VERSION },
       }),
-      metadata: input.metadata,
+      metadata: blockMetadata,
       dedupeKey,
     });
     created++;
@@ -2817,6 +2982,81 @@ async function createReviewNote(input: {
   return result.id;
 }
 
+async function createPrerequisiteAction(input: {
+  jobId: string;
+  source: Exclude<ReviewSource, "state_processor">;
+  content: string;
+  entityNames: string[];
+  relatedActions: ReviewPrerequisiteActionLinkDraft[];
+}): Promise<string | null> {
+  const content = normalizeWhitespace(input.content);
+  if (!content) return null;
+
+  const entityNames = input.entityNames
+    .map((name) => normalizeEntityName(name))
+    .filter(Boolean)
+    .slice(0, 10);
+  const relatedActions = input.relatedActions
+    .map((item) => ({
+      block_id: String(item.block_id ?? ""),
+      label: normalizeWhitespace(String(item.label ?? "")).slice(0, 120),
+    }))
+    .filter((item) => item.block_id && item.label)
+    .slice(0, 10);
+  const dedupeKey = await hashText([
+    "prerequisite_action",
+    input.source,
+    content,
+    entityNames.join("|"),
+    relatedActions.map((item) => `${item.block_id}:${item.label}`).join("|"),
+  ].join(":"));
+
+  const block = await createMuaBlock({
+    content,
+    blockKind: "action_open",
+    source: "job",
+    sourceRef: {
+      v: 1,
+      type: "job_run",
+      id: { job_name: input.jobId },
+      extras: {},
+    },
+    metadata: {
+      source: input.source,
+      type: "prerequisite_action",
+      action_type: "prerequisite",
+    },
+    dedupeKey,
+  });
+
+  for (const entityName of entityNames) {
+    const entity = await ensureEntity(entityName);
+    if (!entity) continue;
+    await insertLink({
+      fromType: "mua_block",
+      fromId: block.id,
+      toType: "entity",
+      toId: entity.id,
+      linkType: "about",
+      metadata: { source: input.source },
+    });
+  }
+
+  for (const relatedAction of relatedActions) {
+    await insertLink({
+      fromType: "mua_block",
+      fromId: block.id,
+      toType: "mua_block",
+      toId: relatedAction.block_id,
+      linkType: "related",
+      label: relatedAction.label,
+      metadata: { source: input.source },
+    });
+  }
+
+  return block.id;
+}
+
 async function fetchPendingMergeCandidateBlocks(limit = 200): Promise<Array<Record<string, unknown>>> {
   const { data } = await supabase
     .from("mua_blocks")
@@ -2945,6 +3185,25 @@ async function applyNewConnections(
   return applied;
 }
 
+async function applyPrerequisiteActions(input: {
+  jobId: string;
+  source: Exclude<ReviewSource, "state_processor">;
+  drafts: ReviewPrerequisiteActionDraft[];
+}): Promise<number> {
+  let applied = 0;
+  for (const draft of input.drafts) {
+    const blockId = await createPrerequisiteAction({
+      jobId: input.jobId,
+      source: input.source,
+      content: draft.content,
+      entityNames: Array.isArray(draft.entity_names) ? draft.entity_names : [],
+      relatedActions: Array.isArray(draft.related_actions) ? draft.related_actions : [],
+    });
+    if (blockId) applied++;
+  }
+  return applied;
+}
+
 export async function mergeEntities(
   keepId: string,
   mergeId: string,
@@ -3043,7 +3302,7 @@ export async function runBoardHourlyReview(input: {
   const lastRunTimestamp = input.lastRunAt ? new Date(input.lastRunAt).toISOString() : null;
   const since24h = new Date(Date.now() - (24 * 60 * 60 * 1000)).toISOString();
 
-  const [muaBlocksRes, userBlocksRes, entitiesRes, linksRes] = await Promise.all([
+  const [muaBlocksRes, userBlocksRes, entitiesRes, linksRes, openActionsRes] = await Promise.all([
     supabase
       .from("mua_blocks")
       .select("id, content, block_kind, created_at, metadata")
@@ -3067,12 +3326,19 @@ export async function runBoardHourlyReview(input: {
       .gte("created_at", since24h)
       .order("created_at", { ascending: false })
       .limit(500),
+    supabase
+      .from("mua_blocks")
+      .select("id, content, created_at, metadata")
+      .eq("block_kind", "action_open")
+      .order("created_at", { ascending: false })
+      .limit(200),
   ]);
 
   const prompt = [
     "You are Muavin's hourly board review.",
-    "Use the JSON context to identify recurring tags, missed entity links, alias updates, and merge candidates.",
+    "Use the JSON context to identify recurring tags, missed entity links, alias updates, merge candidates, and prerequisite actions across open actions.",
     "Focus analysis on blocks created after the last run timestamp. Earlier blocks are context only.",
+    "Look for common dependencies or prerequisites across open actions. If multiple actions share a common prerequisite that is not captured as its own action, create it. Include the prerequisite in `prerequisite_actions`, use `action_type`=`prerequisite`, and link it to related action blocks with explicit `related` labels.",
     "",
     `last_run_timestamp: ${lastRunTimestamp ?? "never"}`,
     "",
@@ -3087,6 +3353,14 @@ export async function runBoardHourlyReview(input: {
     "",
     "links_last_24h:",
     JSON.stringify(linksRes.data ?? [], null, 2),
+    "",
+    "open_actions:",
+    JSON.stringify(((openActionsRes.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+      id: row.id,
+      created_at: row.created_at,
+      content_preview: previewContent(String(row.content ?? "")),
+      metadata: row.metadata,
+    })), null, 2),
   ].join("\n");
 
   const llmResult = await runLLM({
@@ -3110,6 +3384,11 @@ export async function runBoardHourlyReview(input: {
 
   const missedLinks = await applyMissedLinks(parsed.missed_links ?? [], "hourly_review");
   const aliasUpdates = await applyAliasUpdates(parsed.alias_updates ?? []);
+  const prerequisiteActions = await applyPrerequisiteActions({
+    jobId: input.jobId,
+    source: "hourly_review",
+    drafts: parsed.prerequisite_actions ?? [],
+  });
 
   let mergeCandidates = 0;
   for (const candidate of parsed.merge_candidates ?? []) {
@@ -3137,7 +3416,8 @@ export async function runBoardHourlyReview(input: {
     missedLinks,
     aliasUpdates,
     mergeCandidates,
-    summary: normalizeWhitespace(parsed.summary || `hourly review: tags=${createdTags}, missed_links=${missedLinks}, aliases=${aliasUpdates}, merge_candidates=${mergeCandidates}`),
+    prerequisiteActions,
+    summary: normalizeWhitespace(parsed.summary || `hourly review: tags=${createdTags}, missed_links=${missedLinks}, aliases=${aliasUpdates}, merge_candidates=${mergeCandidates}, prerequisite_actions=${prerequisiteActions}`),
   };
 }
 
@@ -3149,7 +3429,7 @@ export async function runBoardDailyReview(input: {
   const entityTouchCounts = await fetchEntityTouchCounts();
   const pendingMergeCandidates = await fetchPendingMergeCandidateBlocks(200);
 
-  const [entitiesRes, recentMuaRes, unlabeledLinksRes] = await Promise.all([
+  const [entitiesRes, recentMuaRes, unlabeledLinksRes, openActionsRes] = await Promise.all([
     supabase
       .from("entities")
       .select("id, name, aliases, created_at")
@@ -3168,6 +3448,12 @@ export async function runBoardDailyReview(input: {
       .gte("created_at", since30d)
       .order("created_at", { ascending: false })
       .limit(200),
+    supabase
+      .from("mua_blocks")
+      .select("id, content, created_at, metadata")
+      .eq("block_kind", "action_open")
+      .order("created_at", { ascending: false })
+      .limit(300),
   ]);
 
   const unlabeledLinks = ((unlabeledLinksRes.data ?? []) as Array<Record<string, unknown>>)
@@ -3194,7 +3480,8 @@ export async function runBoardDailyReview(input: {
 
   const prompt = [
     "You are Muavin's daily board review.",
-    "Review entity merge candidates, tag operations, new semantic connections, and label enrichment for unlabeled related links.",
+    "Review entity merge candidates, tag operations, new semantic connections, label enrichment for unlabeled related links, and prerequisite actions across open actions.",
+    "Look for common dependencies or prerequisites across open actions. If multiple actions share a common prerequisite that is not captured as its own action, create it. Include the prerequisite in `prerequisite_actions`, use `action_type`=`prerequisite`, and link it to related action blocks with explicit `related` labels.",
     "",
     "entities:",
     JSON.stringify(entitiesWithCounts, null, 2),
@@ -3212,6 +3499,14 @@ export async function runBoardDailyReview(input: {
     "",
     "unlabeled_related_links:",
     JSON.stringify(linkContext, null, 2),
+    "",
+    "open_actions:",
+    JSON.stringify(((openActionsRes.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+      id: row.id,
+      created_at: row.created_at,
+      content_preview: previewContent(String(row.content ?? "")),
+      metadata: row.metadata,
+    })), null, 2),
   ].join("\n");
 
   const llmResult = await runLLM({
@@ -3272,6 +3567,11 @@ export async function runBoardDailyReview(input: {
     await setLinkLabel(update.link_id, update.label);
     labelUpdates++;
   }
+  const prerequisiteActions = await applyPrerequisiteActions({
+    jobId: input.jobId,
+    source: "daily_review",
+    drafts: parsed.prerequisite_actions ?? [],
+  });
 
   return {
     merges,
@@ -3279,7 +3579,8 @@ export async function runBoardDailyReview(input: {
     tagOps,
     newConnections,
     labelUpdates,
-    summary: normalizeWhitespace(parsed.summary || `daily review: merges=${merges}, rejected=${rejectedMergeCandidates}, tag_ops=${tagOps}, new_connections=${newConnections}, labels=${labelUpdates}`),
+    prerequisiteActions,
+    summary: normalizeWhitespace(parsed.summary || `daily review: merges=${merges}, rejected=${rejectedMergeCandidates}, tag_ops=${tagOps}, new_connections=${newConnections}, labels=${labelUpdates}, prerequisite_actions=${prerequisiteActions}`),
   };
 }
 
@@ -3327,7 +3628,8 @@ export async function runBoardWeeklyReview(input: {
   }));
   const prompt = [
     "You are Muavin's weekly board review.",
-    "Review the graph for safe pruning, stale actions, structural cleanup, observations, and any lower-tier fixes worth applying now.",
+    "Review the graph for safe pruning, stale-action nudges, structural cleanup, observations, and any lower-tier fixes worth applying now.",
+    "Do not automatically archive or close actions based on age alone. Only recommend nudges or keeping them.",
     "",
     "entities:",
     JSON.stringify(entitiesWithCounts, null, 2),
@@ -3373,11 +3675,6 @@ export async function runBoardWeeklyReview(input: {
   let closedActions = 0;
   let nudges = 0;
   for (const draft of parsed.stale_actions ?? []) {
-    if (draft.suggestion === "close") {
-      await closeAction(draft.block_id, { closedReason: "archived" });
-      closedActions++;
-      continue;
-    }
     if (draft.suggestion === "nudge") {
       const action = openActions.find((row) => String(row.id) === draft.block_id);
       await createReviewNote({

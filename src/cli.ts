@@ -46,6 +46,9 @@ async function main() {
     case "stop":
       await stopCommand();
       break;
+    case "serve":
+      await serveCommand(Bun.argv.slice(3));
+      break;
     case "agent":
       await agentCommand();
       break;
@@ -73,6 +76,9 @@ async function main() {
     case "board":
       await (await import("./board-cli")).boardCommand(Bun.argv.slice(3));
       break;
+    case "notes":
+      await (await import("./notes-cli")).notesCommand(Bun.argv.slice(3));
+      break;
     case "live":
       await liveConversationCommand();
       break;
@@ -84,9 +90,11 @@ async function main() {
       console.log("  config  - Edit configuration (use --reset to restore defaults)");
       console.log("  start   - Deploy launch daemons");
       console.log("  stop    - Stop all daemons");
+      console.log("  serve   - Start the Muavin workspace app");
       console.log("  status  - Check daemon and session status");
       console.log("  test    - Run smoke tests");
       console.log("  agent   - Manage background agents");
+      console.log("  notes   - List notes or create a note in $EDITOR");
       console.log("  write   - Block writing UI (CLI)");
       console.log("  crm     - CRM timeline and ROI view");
       console.log("  inbox   - Inspect ingested artifacts");
@@ -97,6 +105,13 @@ async function main() {
       console.log("  live    - Open a live Claude conversation with Muavin prompt");
       process.exit(0);
   }
+}
+
+async function serveCommand(args: string[]) {
+  const portValue = Number(args[0] ?? "4800");
+  const port = Number.isFinite(portValue) && portValue > 0 ? portValue : 4800;
+  const { startWorkspaceServer } = await import("./board-server");
+  await startWorkspaceServer(port);
 }
 
 const MUAVIN_REPO_DIR = "/Users/deniz/Build/muavin";
@@ -119,6 +134,7 @@ You have access to Muavin's block storage via CLI commands. Your conversation is
 - Only save substantive insights, decisions, plans, and extracted facts as blocks`;
 
 async function liveConversationCommand() {
+  await import("./env");
   heading("Starting live Muavin conversation...\n");
   const muavinDir = `${process.env.HOME}/.muavin`;
   const muavinPromptPath = `${muavinDir}/muavin.md`;
@@ -149,7 +165,7 @@ async function liveConversationCommand() {
   const conductorDir = cwdOverride ?? `${muavinDir}/conductor`;
   await mkdir(conductorDir, { recursive: true });
 
-  const args = ["claude"];
+  const args = ["claude", "--dangerously-skip-permissions"];
 
   const promptFile = Bun.file(muavinPromptPath);
   if (await promptFile.exists()) {
